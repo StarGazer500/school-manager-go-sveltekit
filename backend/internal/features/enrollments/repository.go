@@ -6,37 +6,29 @@ import (
 	"github.com/StarGazer500/pgrepo"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/martin/school-api/internal/database"
+	"github.com/martin/school-api/internal/core"
 	"github.com/martin/school-api/internal/features/courses"
 	"github.com/martin/school-api/internal/features/students"
-	"github.com/martin/school-api/internal/shared/apperr"
+	"github.com/martin/school-api/internal/shared"
 )
 
-type Repository interface {
-	List(ctx context.Context, f ListFilter) ([]Detail, error)
-	FindDetail(ctx context.Context, id int64) (Detail, error)
-	CountByCourse(ctx context.Context, courseID int64) (int, error)
-	Create(ctx context.Context, e *Enrollment) error
-	Delete(ctx context.Context, id int64) error
-}
-
-// pgRepository reads students and courses too, to put their names on each
+// Repository reads students and courses too, to put their names on each
 // Detail. It only reads them; writing them is their own features' job.
-type pgRepository struct {
+type Repository struct {
 	enrollments *pgrepo.Repository[Enrollment]
 	students    *pgrepo.Repository[students.Student]
 	courses     *pgrepo.Repository[courses.Course]
 }
 
-func NewRepository(db pgrepo.DBTX) Repository {
-	return &pgRepository{
+func NewRepository(db pgrepo.DBTX) *Repository {
+	return &Repository{
 		enrollments: pgrepo.New[Enrollment](db),
 		students:    pgrepo.New[students.Student](db),
 		courses:     pgrepo.New[courses.Course](db),
 	}
 }
 
-func (r *pgRepository) List(ctx context.Context, f ListFilter) ([]Detail, error) {
+func (r *Repository) List(ctx context.Context, f ListFilter) ([]Detail, error) {
 	var where []pgrepo.Filter
 	if f.StudentID != 0 {
 		where = append(where, pgrepo.Eq("student_id", f.StudentID))
@@ -58,7 +50,7 @@ func (r *pgRepository) List(ctx context.Context, f ListFilter) ([]Detail, error)
 // withNames turns enrollments into Details. Instead of one query per row, it
 // loads all the students in one query and all the courses in another
 // (pgrepo.ManyToOne: SELECT * FROM students WHERE id IN (...)).
-func (r *pgRepository) withNames(ctx context.Context, list []Enrollment) ([]Detail, error) {
+func (r *Repository) withNames(ctx context.Context, list []Enrollment) ([]Detail, error) {
 	studentIDs := make([]int64, len(list))
 	courseIDs := make([]int64, len(list))
 	for i, e := range list {
@@ -106,13 +98,13 @@ func (r *pgRepository) withNames(ctx context.Context, list []Enrollment) ([]Deta
 	return out, nil
 }
 
-func (r *pgRepository) FindDetail(ctx context.Context, id int64) (Detail, error) {
+func (r *Repository) FindDetail(ctx context.Context, id int64) (Detail, error) {
 	e, err := r.enrollments.Get(ctx, id)
 	if err != nil {
 		return Detail{}, err
 	}
 	if e == nil {
-		return Detail{}, apperr.NotFound("enrollment not found")
+		return Detail{}, shared.NotFound("enrollment not found")
 	}
 	details, err := r.withNames(ctx, []Enrollment{*e})
 	if err != nil {
@@ -121,12 +113,12 @@ func (r *pgRepository) FindDetail(ctx context.Context, id int64) (Detail, error)
 	return details[0], nil
 }
 
-func (r *pgRepository) CountByCourse(ctx context.Context, courseID int64) (int, error) {
+func (r *Repository) CountByCourse(ctx context.Context, courseID int64) (int, error) {
 	n, err := r.enrollments.Count(ctx, pgrepo.Eq("course_id", courseID))
 	return int(n), err
 }
 
-func (r *pgRepository) Create(ctx context.Context, e *Enrollment) error {
+func (r *Repository) Create(ctx context.Context, e *Enrollment) error {
 	created, err := r.enrollments.Create(ctx, map[string]any{
 		"student_id":  e.StudentID,
 		"course_id":   e.CourseID,
@@ -135,10 +127,10 @@ func (r *pgRepository) Create(ctx context.Context, e *Enrollment) error {
 	// More specific messages than MapError's generic ones. The course was
 	// already checked by the service, so a FK failure here means the student.
 	switch {
-	case database.IsUniqueViolation(err):
-		return apperr.Conflict("student is already enrolled in this course")
-	case database.IsForeignKeyViolation(err):
-		return apperr.Invalid("student does not exist")
+	case core.IsUniqueViolation(err):
+		return shared.Conflict("student is already enrolled in this course")
+	case core.IsForeignKeyViolation(err):
+		return shared.Invalid("student does not exist")
 	case err != nil:
 		return err
 	}
@@ -146,13 +138,13 @@ func (r *pgRepository) Create(ctx context.Context, e *Enrollment) error {
 	return nil
 }
 
-func (r *pgRepository) Delete(ctx context.Context, id int64) error {
+func (r *Repository) Delete(ctx context.Context, id int64) error {
 	deleted, err := r.enrollments.Delete(ctx, id)
 	if err != nil {
 		return err
 	}
 	if !deleted {
-		return apperr.NotFound("enrollment not found")
+		return shared.NotFound("enrollment not found")
 	}
 	return nil
 }

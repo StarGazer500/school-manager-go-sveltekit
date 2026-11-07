@@ -1,7 +1,7 @@
-// Package database opens the PostgreSQL connection pool, runs migrations
-// (migrate.go) and maps database errors to app errors. Repositories use
-// pgrepo on top of the pool.
-package database
+package core
+
+// PostgreSQL: opening the connection pool and mapping database errors to app
+// errors. Migrations are in migrate.go. Repositories use pgrepo on top of the pool.
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/martin/school-api/internal/shared/apperr"
+	"github.com/martin/school-api/internal/shared"
 )
 
 // PostgreSQL error codes we care about (https://www.postgresql.org/docs/current/errcodes-appendix.html).
@@ -20,8 +20,8 @@ const (
 	foreignKeyViolation = "23503"
 )
 
-// Open creates a connection pool for url and checks the database is reachable.
-func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
+// OpenDatabase creates a connection pool for url and checks the database is reachable.
+func OpenDatabase(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	pool, err := pgxpool.New(ctx, url)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
@@ -34,16 +34,16 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-// MapError converts database errors into apperr kinds. entity is used in the
+// MapError converts database errors into shared error kinds. entity is used in the
 // message, e.g. "student already exists".
 func MapError(err error, entity string) error {
 	switch {
 	case err == nil:
 		return nil
 	case IsUniqueViolation(err):
-		return apperr.Conflict("%s already exists", entity)
+		return shared.Conflict("%s already exists", entity)
 	case IsForeignKeyViolation(err):
-		return apperr.Invalid("%s references a record that does not exist", entity)
+		return shared.Invalid("%s references a record that does not exist", entity)
 	default:
 		return err
 	}

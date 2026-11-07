@@ -11,24 +11,24 @@ gosvelte/
 ```
 
 You need **Go** (any version from 1.21 up: it downloads Go 1.27.3, which `backend/go.mod`
-asks for, automatically), **Node 22.17+** and **Docker** (for PostgreSQL).
+asks for, automatically), **Node 22.17+** and **Docker** (for PostgreSQL and Redis).
 
 ## Running it
 
 With `make`, from the project root:
 
 ```bash
-make dev        # Postgres (Docker) + backend on :8080 + frontend on :5173 (Ctrl+C stops the servers)
+make dev        # Postgres + Redis (Docker) + backend on :8080 + frontend on :5173 (Ctrl+C stops the servers)
 make check      # go vet/test + svelte-check
 ```
 
 Each folder has its own Makefile too. Run `make` in `backend/` or `frontend/` to list
-the targets (`run`, `db-up`, `db-down`, `db-reset`, `db-shell`, `migrate-*`, `dev`, `check`, …). The
-frontend Makefile switches to the Node version in `.nvmrc` automatically. Postgres keeps
-running after Ctrl+C; stop it with `make -C backend db-down`.
+the targets (`run`, `db-up`, `db-down`, `db-reset`, `db-shell`, `cache-shell`, `cache-flush`,
+`migrate-*`, `dev`, `check`, …). The frontend Makefile switches to the Node version in `.nvmrc`
+automatically. Postgres and Redis keep running after Ctrl+C; stop them with `make -C backend db-down`.
 
-> **pgrepo is a private module.** Go can only download it with
-> `GOPRIVATE=github.com/StarGazer500` set (and SSH access to the repo). `backend/Makefile`
+> **pgrepo and rediscache are private modules.** Go can only download them with
+> `GOPRIVATE=github.com/StarGazer500` set (and SSH access to the repos). `backend/Makefile`
 > sets this for you. If you run `go` commands directly, export it first, or run
 > `go env -w GOPRIVATE=github.com/StarGazer500` once.
 
@@ -38,7 +38,7 @@ Without `make`:
 
 ```bash
 cd backend
-docker compose up -d --wait db              # PostgreSQL on localhost:5433
+docker compose up -d --wait db redis        # PostgreSQL on localhost:5433, Redis on 6380
 export GOPRIVATE=github.com/StarGazer500
 go run ./cmd/api
 ```
@@ -60,39 +60,48 @@ Settings (environment variables):
 | -------- | -------------- | ---------------------------------------------------------- |
 | backend  | `PORT`         | `8080`                                                     |
 | backend  | `DATABASE_URL` | `postgres://school:school@localhost:5433/school?sslmode=disable` |
+| backend  | `REDIS_URL`    | `redis://localhost:6380/0`                                 |
+| backend  | `LOG_FORMAT`   | `console` (readable, colored) or `json` (one JSON object per line, for production) |
+| backend  | `LOG_LEVEL`    | `info` (also `debug`, `warn`, `error`)                     |
 | frontend | `API_TARGET`   | `http://localhost:8080` (where the dev proxy sends `/api`) |
 
-The database runs from [backend/docker-compose.yml](backend/docker-compose.yml) on port
-**5433**, so it doesn't clash with another Postgres on the default 5432. Its data lives in
-a Docker volume and survives restarts; `make -C backend db-reset` deletes it.
+Postgres and Redis run from [backend/docker-compose.yml](backend/docker-compose.yml) on ports
+**5433** and **6380**, so they don't clash with another Postgres or Redis on the defaults
+(5432, 6379). Postgres keeps its data in a Docker volume that survives restarts
+(`make -C backend db-reset` deletes it). Redis is only a cache, keeps nothing on disk, and starts empty.
 
 ## Backend layout
 
 ```
 backend/
-├── docker-compose.yml           PostgreSQL 18 for local development
+├── docker-compose.yml           PostgreSQL 18 + Redis 7.4 for local development
 ├── migrations/                  numbered SQL files (goose), embedded into the binary
 ├── cmd/
 │   ├── api/main.go              entrypoint: config → DB → migrate → server → graceful shutdown
 │   └── migrate/main.go          `make migrate-*` commands: up, down, status, new
 └── internal/
-    ├── config/                  env vars
-    ├── database/                open the pgx pool, run migrations, map Postgres errors → app errors
-    ├── server/server.go         composition root: wires every feature together
-    ├── shared/
-    │   ├── apperr/              error kinds: NotFound / Conflict / Invalid
-    │   └── httpx/               Gin helpers: error → HTTP status, ID parsing, validation messages
+    ├── core/                    one package (`core`): infrastructure set up at startup
+    │   ├── config.go            env vars (LoadConfig)
+    │   ├── database.go          pgx pool (OpenDatabase), Postgres errors → app errors (MapError)
+    │   ├── migrate.go           goose migrations (Migrate, Migrator)
+    │   └── cache.go             Redis (OpenRedis), caches for services (NewCache[T]), not-found helpers
+    ├── logger/                  builds the zerolog logger (console or JSON)
+    ├── server/server.go         composition root: middleware + wires every feature together
+    ├── shared/                  one package (`shared`) used by every feature:
+    │   ├── commonutils.go       error kinds (NotFound / Conflict / Invalid, type AppError) +
+    │   │                        Gin helpers: errors → HTTP status, ID parsing, validation messages
+    │   └── middleware.go        request logging + panic recovery
     └── features/
         ├── students/
         │   ├── model.go         DB entity with `db` tags + TableName() (+ list filter)
         │   ├── dto.go           JSON request/response shapes + mapping
-        │   ├── repository.go    interface + pgrepo implementation
-        │   ├── service.go       business rules (no HTTP, no SQL)
+        │   ├── repository.go    Postgres access with pgrepo (a concrete struct, no interface)
+        │   ├── service.go       business rules (no HTTP, no SQL); repository + cache injected
         │   ├── handler.go       HTTP ↔ service
         │   └── routes.go        mounts endpoints
         ├── teachers/            same shape
         ├── courses/             same shape (+ optional teacher FK)
-        └── enrollments/         same shape (+ depends on courses)
+        └── enrollments/         same shape, no cache (+ depends on courses)
 ```
 
 A request flows **router → handler → service → repository → DB**, and each layer has one job:
@@ -101,9 +110,10 @@ A request flows **router → handler → service → repository → DB**, and ea
 - **Service**: business rules, e.g. "a course can't take more students than its capacity"
   ([enrollments/service.go](backend/internal/features/enrollments/service.go)).
 - **Repository**: database access only, through [pgrepo](https://github.com/StarGazer500/pgrepo),
-  which writes the SQL from each model's `db` tags. It returns `apperr` errors, so services
+  which writes the SQL from each model's `db` tags. It returns `shared` error kinds, so services
   never see SQL or driver errors.
-- **Errors**: services return `apperr.NotFound(...)` and similar, and `httpx.Error` turns them into 404/409/400.
+- **Errors**: services return `shared.NotFound(...)` and similar, and handlers turn them into 404/409/400:
+  `status, msg := shared.ErrorResponse(c, err)` then `c.AbortWithStatusJSON(status, gin.H{"error": msg})`.
   Unknown errors become 500 and are logged.
 
 Things worth reading in the code:
@@ -120,6 +130,89 @@ Things worth reading in the code:
 - **pgrepo basics.** `Get`/`Update` return `nil` when no row matches, which the repositories
   turn into a 404. `Create`/`Update` take a `map[string]any` of columns and return the
   saved row, so database defaults like `id` and `created_at` come back filled in.
+
+### Caching (rediscache)
+
+Looking up one student, teacher or course by id goes through a Redis cache, built with
+[rediscache](https://github.com/StarGazer500/rediscache). The cache is **injected into each
+service** next to its repository, in [server.go](backend/internal/server/server.go):
+
+```go
+studentSvc := students.NewService(
+	students.NewRepository(db),                    // Postgres
+	core.NewCache[students.Student](rdb, "student:"),  // Redis
+)
+```
+
+Each service declares the cache methods it uses as a small interface, the same idea as
+`CourseReader` in enrollments. `*rediscache.Cache[Student]` satisfies it, and a test can
+pass a fake:
+
+```go
+type Cache interface {
+	GetOrLoad(ctx context.Context, key string, load func(context.Context) (Student, error), opts ...rediscache.SetOption) (Student, error)
+	Delete(ctx context.Context, keys ...string) (int64, error)
+}
+```
+
+- **Reads** (`Service.Get`) use `GetOrLoad`: the cached value if there is one, otherwise load
+  it from the repository and store it. `core.ToCache`/`core.FromCache` translate between
+  the app's not-found error and rediscache's, so misses are remembered and handlers still
+  answer 404. Entries last 10 minutes. Concurrent misses for the same id
+  share one query, and unknown ids are remembered as "not found" for 1 minute.
+- **Writes** (`Create`, `Update`, `Delete`) go to Postgres first, then remove the cached entry,
+  so the next read loads fresh data. `Update` reads the row from Postgres, not the cache, so
+  it starts from current data. Lists (`List`) aren't cached: every search would be its own entry.
+- **Tags across features.** Deleting a teacher makes Postgres set `teacher_id` to NULL on
+  their courses, which the courses cache can't see. So every cached course carries the
+  `courses` tag (`courses.CacheTag`), and the teachers service invalidates it in `Delete`.
+- **Redis is optional.** If it's down, the API still starts, reads go straight to Postgres
+  (a couple of milliseconds, since the client gives up quickly), and warnings are logged.
+- **Look inside** with `make -C backend cache-shell`, then `KEYS *` or `TTL student:1`.
+  `make -C backend cache-flush` empties it.
+
+Changed data directly in the database (e.g. with `db-shell`)? The cache won't notice until the
+entry expires; run `cache-flush`.
+
+### Logging (zerolog)
+
+Logs are **structured**: a message plus named fields, written with
+[zerolog](https://github.com/rs/zerolog). In development they print as readable lines:
+
+```
+16:18:55 INF request method=GET path=/api/v1/students status=200 latency=13.6 request_id=c6e5c72a9ef7b5de
+16:18:55 WRN request method=POST path=/api/v1/students status=409 latency=5.1 request_id=e6365961ff72870f
+```
+
+With `LOG_FORMAT=json`, each line is a JSON object instead, which log tools can filter by
+field (e.g. every `status` ≥ 500).
+
+- **One line per request** from `shared.RequestLogger`: `INF` for success, `WRN` for 4xx,
+  `ERR` for 5xx. `latency` is in milliseconds.
+- **Every request gets an ID.** It's in each log line for that request and in the
+  `X-Request-ID` response header, so an error seen in the browser's network tab can be
+  found in the logs. If a proxy already sent an `X-Request-ID`, that one is reused.
+- **How code gets the logger.** There's no global logger. The rule is *injected at startup,
+  carried in `ctx` during a request*:
+  - **Outside a request** (startup, migrations, Redis, the caches' error handler), `main.go`
+    passes the logger as a parameter: `core.Migrate(ctx, db, log)`,
+    `core.OpenRedis(ctx, url, log)`, `core.NewCache[T](rdb, prefix, log)`, `server.New(db, rdb, log)`.
+  - **Inside a request**, the middleware puts a logger with the request ID into the
+    request's context. Get it with `zerolog.Ctx(ctx)`, and your line carries the same
+    `request_id`:
+
+    ```go
+    zerolog.Ctx(ctx).Info().Int64("course_id", id).Msg("course is full")
+    ```
+
+  Outside a request `zerolog.Ctx(ctx)` returns a logger that writes **nothing**, so pass
+  a logger in there instead.
+- **go-redis's own messages** are sent through zerolog at debug level (`source=go-redis`),
+  so they only show with `LOG_LEVEL=debug` and JSON output stays valid.
+
+- **Unexpected errors** (anything that isn't a `shared.AppError`) are logged by `shared.ErrorResponse` with
+  the real error, while the client only sees `internal server error`. **Panics** are
+  caught by `shared.Recoverer`, logged with a stack trace, and answered with a 500.
 
 ### Database migrations (goose)
 

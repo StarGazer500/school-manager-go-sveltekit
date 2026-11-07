@@ -6,27 +6,20 @@ import (
 
 	"github.com/StarGazer500/pgrepo"
 
-	"github.com/martin/school-api/internal/database"
-	"github.com/martin/school-api/internal/shared/apperr"
+	"github.com/martin/school-api/internal/core"
+	"github.com/martin/school-api/internal/shared"
 )
 
-type Repository interface {
-	List(ctx context.Context, f ListFilter) ([]Teacher, error)
-	FindByID(ctx context.Context, id int64) (Teacher, error)
-	Create(ctx context.Context, t *Teacher) error
-	Update(ctx context.Context, t *Teacher) error
-	Delete(ctx context.Context, id int64) error
-}
-
-type pgRepository struct {
+// Repository stores teachers in Postgres with pgrepo (see students/repository.go).
+type Repository struct {
 	rows *pgrepo.Repository[Teacher]
 }
 
-func NewRepository(db pgrepo.DBTX) Repository {
-	return &pgRepository{rows: pgrepo.New[Teacher](db)}
+func NewRepository(db pgrepo.DBTX) *Repository {
+	return &Repository{rows: pgrepo.New[Teacher](db)}
 }
 
-func (r *pgRepository) List(ctx context.Context, f ListFilter) ([]Teacher, error) {
+func (r *Repository) List(ctx context.Context, f ListFilter) ([]Teacher, error) {
 	var where []pgrepo.Filter
 	if f.Search != "" {
 		like := "%" + f.Search + "%"
@@ -43,18 +36,18 @@ func (r *pgRepository) List(ctx context.Context, f ListFilter) ([]Teacher, error
 	})
 }
 
-func (r *pgRepository) FindByID(ctx context.Context, id int64) (Teacher, error) {
+func (r *Repository) FindByID(ctx context.Context, id int64) (Teacher, error) {
 	t, err := r.rows.Get(ctx, id)
 	if err != nil {
 		return Teacher{}, err
 	}
 	if t == nil {
-		return Teacher{}, apperr.NotFound("teacher not found")
+		return Teacher{}, shared.NotFound("teacher not found")
 	}
 	return *t, nil
 }
 
-func (r *pgRepository) Create(ctx context.Context, t *Teacher) error {
+func (r *Repository) Create(ctx context.Context, t *Teacher) error {
 	created, err := r.rows.Create(ctx, map[string]any{
 		"first_name": t.FirstName,
 		"last_name":  t.LastName,
@@ -62,13 +55,13 @@ func (r *pgRepository) Create(ctx context.Context, t *Teacher) error {
 		"subject":    t.Subject,
 	})
 	if err != nil {
-		return database.MapError(err, "teacher")
+		return core.MapError(err, "teacher")
 	}
 	*t = *created
 	return nil
 }
 
-func (r *pgRepository) Update(ctx context.Context, t *Teacher) error {
+func (r *Repository) Update(ctx context.Context, t *Teacher) error {
 	updated, err := r.rows.Update(ctx, t.ID, map[string]any{
 		"first_name": t.FirstName,
 		"last_name":  t.LastName,
@@ -77,22 +70,22 @@ func (r *pgRepository) Update(ctx context.Context, t *Teacher) error {
 		"updated_at": time.Now(),
 	})
 	if err != nil {
-		return database.MapError(err, "teacher")
+		return core.MapError(err, "teacher")
 	}
 	if updated == nil {
-		return apperr.NotFound("teacher not found")
+		return shared.NotFound("teacher not found")
 	}
 	*t = *updated
 	return nil
 }
 
-func (r *pgRepository) Delete(ctx context.Context, id int64) error {
+func (r *Repository) Delete(ctx context.Context, id int64) error {
 	deleted, err := r.rows.Delete(ctx, id)
 	if err != nil {
 		return err
 	}
 	if !deleted {
-		return apperr.NotFound("teacher not found")
+		return shared.NotFound("teacher not found")
 	}
 	return nil
 }

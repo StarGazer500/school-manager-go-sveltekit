@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/martin/school-api/internal/shared/httpx"
+	"github.com/martin/school-api/internal/shared"
 )
 
 type Handler struct {
@@ -20,7 +20,8 @@ func NewHandler(svc *Service) *Handler {
 func (h *Handler) list(c *gin.Context) {
 	list, err := h.svc.List(c.Request.Context(), ListFilter{Search: c.Query("q")})
 	if err != nil {
-		httpx.Error(c, err)
+		status, msg := shared.ErrorResponse(c, err)
+		c.AbortWithStatusJSON(status, gin.H{"error": msg})
 		return
 	}
 	c.JSON(http.StatusOK, toResponses(list))
@@ -28,14 +29,16 @@ func (h *Handler) list(c *gin.Context) {
 
 // GET /teachers/:id
 func (h *Handler) get(c *gin.Context) {
-	id, err := httpx.IDParam(c, "id")
+	id, err := shared.IDParam(c, "id")
 	if err != nil {
-		httpx.Error(c, err)
+		status, msg := shared.ErrorResponse(c, err)
+		c.AbortWithStatusJSON(status, gin.H{"error": msg})
 		return
 	}
 	t, err := h.svc.Get(c.Request.Context(), id)
 	if err != nil {
-		httpx.Error(c, err)
+		status, msg := shared.ErrorResponse(c, err)
+		c.AbortWithStatusJSON(status, gin.H{"error": msg})
 		return
 	}
 	c.JSON(http.StatusOK, toResponse(t))
@@ -45,12 +48,13 @@ func (h *Handler) get(c *gin.Context) {
 func (h *Handler) create(c *gin.Context) {
 	var in TeacherInput
 	if err := c.ShouldBindJSON(&in); err != nil {
-		httpx.BadRequest(c, err)
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": shared.ValidationMessage(err)})
 		return
 	}
 	t, err := h.svc.Create(c.Request.Context(), in)
 	if err != nil {
-		httpx.Error(c, err)
+		status, msg := shared.ErrorResponse(c, err)
+		c.AbortWithStatusJSON(status, gin.H{"error": msg})
 		return
 	}
 	c.JSON(http.StatusCreated, toResponse(t))
@@ -58,19 +62,21 @@ func (h *Handler) create(c *gin.Context) {
 
 // PUT /teachers/:id
 func (h *Handler) update(c *gin.Context) {
-	id, err := httpx.IDParam(c, "id")
+	id, err := shared.IDParam(c, "id")
 	if err != nil {
-		httpx.Error(c, err)
+		status, msg := shared.ErrorResponse(c, err)
+		c.AbortWithStatusJSON(status, gin.H{"error": msg})
 		return
 	}
 	var in TeacherInput
 	if err := c.ShouldBindJSON(&in); err != nil {
-		httpx.BadRequest(c, err)
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": shared.ValidationMessage(err)})
 		return
 	}
 	t, err := h.svc.Update(c.Request.Context(), id, in)
 	if err != nil {
-		httpx.Error(c, err)
+		status, msg := shared.ErrorResponse(c, err)
+		c.AbortWithStatusJSON(status, gin.H{"error": msg})
 		return
 	}
 	c.JSON(http.StatusOK, toResponse(t))
@@ -78,13 +84,15 @@ func (h *Handler) update(c *gin.Context) {
 
 // DELETE /teachers/:id
 func (h *Handler) delete(c *gin.Context) {
-	id, err := httpx.IDParam(c, "id")
+	id, err := shared.IDParam(c, "id")
 	if err != nil {
-		httpx.Error(c, err)
+		status, msg := shared.ErrorResponse(c, err)
+		c.AbortWithStatusJSON(status, gin.H{"error": msg})
 		return
 	}
 	if err := h.svc.Delete(c.Request.Context(), id); err != nil {
-		httpx.Error(c, err)
+		status, msg := shared.ErrorResponse(c, err)
+		c.AbortWithStatusJSON(status, gin.H{"error": msg})
 		return
 	}
 	c.Status(http.StatusNoContent)

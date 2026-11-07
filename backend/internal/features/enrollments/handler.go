@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/martin/school-api/internal/shared/httpx"
+	"github.com/martin/school-api/internal/shared"
 )
 
 type Handler struct {
@@ -18,20 +18,23 @@ func NewHandler(svc *Service) *Handler {
 
 // GET /enrollments?studentId=1&courseId=2
 func (h *Handler) list(c *gin.Context) {
-	studentID, err := httpx.OptionalIDQuery(c, "studentId")
+	studentID, err := shared.OptionalIDQuery(c, "studentId")
 	if err != nil {
-		httpx.Error(c, err)
+		status, msg := shared.ErrorResponse(c, err)
+		c.AbortWithStatusJSON(status, gin.H{"error": msg})
 		return
 	}
-	courseID, err := httpx.OptionalIDQuery(c, "courseId")
+	courseID, err := shared.OptionalIDQuery(c, "courseId")
 	if err != nil {
-		httpx.Error(c, err)
+		status, msg := shared.ErrorResponse(c, err)
+		c.AbortWithStatusJSON(status, gin.H{"error": msg})
 		return
 	}
 
 	list, err := h.svc.List(c.Request.Context(), ListFilter{StudentID: studentID, CourseID: courseID})
 	if err != nil {
-		httpx.Error(c, err)
+		status, msg := shared.ErrorResponse(c, err)
+		c.AbortWithStatusJSON(status, gin.H{"error": msg})
 		return
 	}
 	c.JSON(http.StatusOK, toResponses(list))
@@ -41,12 +44,13 @@ func (h *Handler) list(c *gin.Context) {
 func (h *Handler) create(c *gin.Context) {
 	var in EnrollInput
 	if err := c.ShouldBindJSON(&in); err != nil {
-		httpx.BadRequest(c, err)
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": shared.ValidationMessage(err)})
 		return
 	}
 	d, err := h.svc.Enroll(c.Request.Context(), in)
 	if err != nil {
-		httpx.Error(c, err)
+		status, msg := shared.ErrorResponse(c, err)
+		c.AbortWithStatusJSON(status, gin.H{"error": msg})
 		return
 	}
 	c.JSON(http.StatusCreated, toResponse(d))
@@ -54,13 +58,15 @@ func (h *Handler) create(c *gin.Context) {
 
 // DELETE /enrollments/:id
 func (h *Handler) delete(c *gin.Context) {
-	id, err := httpx.IDParam(c, "id")
+	id, err := shared.IDParam(c, "id")
 	if err != nil {
-		httpx.Error(c, err)
+		status, msg := shared.ErrorResponse(c, err)
+		c.AbortWithStatusJSON(status, gin.H{"error": msg})
 		return
 	}
 	if err := h.svc.Withdraw(c.Request.Context(), id); err != nil {
-		httpx.Error(c, err)
+		status, msg := shared.ErrorResponse(c, err)
+		c.AbortWithStatusJSON(status, gin.H{"error": msg})
 		return
 	}
 	c.Status(http.StatusNoContent)

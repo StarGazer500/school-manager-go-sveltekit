@@ -15,8 +15,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 
-	"github.com/martin/school-api/internal/config"
-	"github.com/martin/school-api/internal/database"
+	"github.com/martin/school-api/internal/core"
 )
 
 // Where `new` writes files. Relative to the backend folder.
@@ -41,13 +40,13 @@ func main() {
 	}
 
 	ctx := context.Background()
-	pool, err := database.Open(ctx, config.Load().DatabaseURL)
+	pool, err := core.OpenDatabase(ctx, core.LoadConfig().DatabaseURL)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer pool.Close()
 
-	p, close, err := database.Migrator(pool)
+	p, close, err := core.Migrator(pool)
 	if err != nil {
 		log.Fatal(err)
 	}

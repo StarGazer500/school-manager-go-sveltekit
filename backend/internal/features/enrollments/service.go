@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/martin/school-api/internal/features/courses"
-	"github.com/martin/school-api/internal/shared/apperr"
+	"github.com/martin/school-api/internal/shared"
 )
 
 // CourseReader is the one thing enrollments needs from the courses feature.
@@ -17,11 +17,11 @@ type CourseReader interface {
 }
 
 type Service struct {
-	repo    Repository
+	repo    *Repository
 	courses CourseReader
 }
 
-func NewService(repo Repository, courses CourseReader) *Service {
+func NewService(repo *Repository, courses CourseReader) *Service {
 	return &Service{repo: repo, courses: courses}
 }
 
@@ -45,7 +45,7 @@ func (s *Service) Enroll(ctx context.Context, in EnrollInput) (Detail, error) {
 		return Detail{}, err
 	}
 	if taken >= course.Capacity {
-		return Detail{}, apperr.Conflict("course %s is full (%d/%d)", course.Code, taken, course.Capacity)
+		return Detail{}, shared.Conflict("course %s is full (%d/%d)", course.Code, taken, course.Capacity)
 	}
 
 	e := Enrollment{StudentID: in.StudentID, CourseID: course.ID, EnrolledAt: time.Now().UTC()}

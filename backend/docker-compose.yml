@@ -1,8 +1,8 @@
 name: school-manager
 
-# PostgreSQL for local development. Start it with `make db-up`.
-# It listens on 5433 (not the default 5432) so it doesn't clash with another
-# Postgres already running on this machine.
+# Local development services. Start them with `make db-up`.
+# The ports are moved off the defaults (5432, 6379) so they don't clash with
+# another Postgres or Redis already running on this machine.
 services:
   db:
     image: postgres:18
@@ -17,6 +17,19 @@ services:
       - school-db:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U school -d school"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # Cache only: everything in it can be rebuilt from Postgres, so it keeps no
+  # data on disk and starts empty every time.
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       timeout: 3s
       retries: 15

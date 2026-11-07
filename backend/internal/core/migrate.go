@@ -1,13 +1,13 @@
-package database
+package core
 
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+	"github.com/rs/zerolog"
 
 	"github.com/martin/school-api/migrations"
 )
@@ -31,8 +31,8 @@ func Migrator(pool *pgxpool.Pool) (p *goose.Provider, close func() error, err er
 
 // Migrate applies every migration that hasn't run yet. The API calls it at
 // startup, so a fresh database gets all tables and an existing one gets
-// only the new migrations.
-func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
+// only the new migrations. Each applied migration is logged to log.
+func Migrate(ctx context.Context, pool *pgxpool.Pool, log zerolog.Logger) error {
 	p, close, err := Migrator(pool)
 	if err != nil {
 		return err
@@ -41,7 +41,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 
 	results, err := p.Up(ctx)
 	for _, r := range results {
-		log.Printf("migration %s", r)
+		log.Info().Str("file", r.Source.Path).Dur("took", r.Duration).Msg("migration applied")
 	}
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
