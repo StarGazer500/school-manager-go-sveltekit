@@ -16,19 +16,12 @@ import (
 // to drop every cached course at once.
 const CacheTag = "courses"
 
-// Cache is what the service needs from a cache of courses (see
-// students/service.go for the idea).
-type Cache interface {
-	GetOrLoad(ctx context.Context, key string, load func(context.Context) (Course, error), opts ...rediscache.SetOption) (Course, error)
-	Delete(ctx context.Context, keys ...string) (int64, error)
-}
-
 type Service struct {
 	repo  *Repository
-	cache Cache
+	cache *rediscache.Cache[Course]
 }
 
-func NewService(repo *Repository, c Cache) *Service {
+func NewService(repo *Repository, c *rediscache.Cache[Course]) *Service {
 	return &Service{repo: repo, cache: c}
 }
 

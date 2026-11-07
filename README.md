@@ -144,16 +144,20 @@ studentSvc := students.NewService(
 )
 ```
 
-Each service declares the cache methods it uses as a small interface, the same idea as
-`CourseReader` in enrollments. `*rediscache.Cache[Student]` satisfies it, and a test can
-pass a fake:
+The service holds the concrete types, with no interfaces in between:
 
 ```go
-type Cache interface {
-	GetOrLoad(ctx context.Context, key string, load func(context.Context) (Student, error), opts ...rediscache.SetOption) (Student, error)
-	Delete(ctx context.Context, keys ...string) (int64, error)
+type Service struct {
+	repo  *Repository                 // Postgres
+	cache *rediscache.Cache[Student]  // Redis
 }
 ```
+
+> **Interfaces in this project** follow the Go habit *"discover interfaces, don't design
+> them"*: add one when a second implementation is needed at the same time, e.g. a fake
+> repository or cache for tests. Until then, concrete types are simpler. The one interface
+> left is `CourseReader` in enrollments, which has a different job: it limits enrollments
+> to the single courses method it needs.
 
 - **Reads** (`Service.Get`) use `GetOrLoad`: the cached value if there is one, otherwise load
   it from the repository and store it. `core.ToCache`/`core.FromCache` translate between

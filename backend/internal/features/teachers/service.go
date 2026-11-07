@@ -11,20 +11,12 @@ import (
 	"github.com/martin/school-api/internal/features/courses"
 )
 
-// Cache is what the service needs from a cache of teachers (see
-// students/service.go for the idea). Invalidate is here too, for Delete.
-type Cache interface {
-	GetOrLoad(ctx context.Context, key string, load func(context.Context) (Teacher, error), opts ...rediscache.SetOption) (Teacher, error)
-	Delete(ctx context.Context, keys ...string) (int64, error)
-	Invalidate(ctx context.Context, tags ...string) (int64, error)
-}
-
 type Service struct {
 	repo  *Repository
-	cache Cache
+	cache *rediscache.Cache[Teacher]
 }
 
-func NewService(repo *Repository, c Cache) *Service {
+func NewService(repo *Repository, c *rediscache.Cache[Teacher]) *Service {
 	return &Service{repo: repo, cache: c}
 }
 

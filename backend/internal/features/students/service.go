@@ -10,24 +10,16 @@ import (
 	"github.com/martin/school-api/internal/core"
 )
 
-// Cache is what the service needs from a cache of students. server.go
-// injects a *rediscache.Cache[Student] (Redis); a test can pass a fake that
-// just calls load. Declaring the interface here, where it's used, keeps the
-// service to the two methods it actually needs.
-type Cache interface {
-	GetOrLoad(ctx context.Context, key string, load func(context.Context) (Student, error), opts ...rediscache.SetOption) (Student, error)
-	Delete(ctx context.Context, keys ...string) (int64, error)
-}
-
 // Service holds the business rules. It knows nothing about HTTP or SQL:
 // it takes plain Go values, talks to storage through Repository, and keeps
-// single students in Cache.
+// single students in a Redis cache. Both are concrete types; add an interface
+// only when a second implementation is needed (for example a fake for tests).
 type Service struct {
 	repo  *Repository
-	cache Cache
+	cache *rediscache.Cache[Student]
 }
 
-func NewService(repo *Repository, c Cache) *Service {
+func NewService(repo *Repository, c *rediscache.Cache[Student]) *Service {
 	return &Service{repo: repo, cache: c}
 }
 

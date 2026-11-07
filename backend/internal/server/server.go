@@ -32,9 +32,9 @@ func New(db *pgxpool.Pool, rdb redis.UniversalClient, log zerolog.Logger) *gin.E
 	api := r.Group("/api/v1")
 
 	// Each service gets its two dependencies injected: a Postgres repository
-	// and a Redis cache for its type. The cache is an interface declared by
-	// the feature (so the service doesn't depend on Redis); the repository is
-	// the concrete Postgres type.
+	// and a Redis cache for its type. Both are concrete types; the only
+	// interface here is enrollments' CourseReader, which limits enrollments
+	// to the one courses method it needs.
 	studentSvc := students.NewService(
 		students.NewRepository(db),
 		core.NewCache[students.Student](rdb, "student:", log),
