@@ -10,7 +10,8 @@ gosvelte/
 └── frontend/   SvelteKit 3 + Svelte 5         → http://localhost:5173
 ```
 
-You need **Go 1.23+**, **Node 22.17+** and **Docker** (for PostgreSQL).
+You need **Go** (any version from 1.21 up: it downloads Go 1.27.3, which `backend/go.mod`
+asks for, automatically), **Node 22.17+** and **Docker** (for PostgreSQL).
 
 ## Running it
 
