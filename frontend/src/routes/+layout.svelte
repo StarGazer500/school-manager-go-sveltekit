@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import favicon from '#lib/assets/favicon.svg';
+	import Flash from '#lib/ui/Flash.svelte';
 	import { page } from '$app/state';
 	import type { LayoutProps } from './$types';
 
@@ -39,6 +40,7 @@
 	</header>
 
 	<main class="mx-auto max-w-5xl px-4 pt-6 pb-12">
+		<Flash />
 		{@render children()}
 	</main>
 </div>

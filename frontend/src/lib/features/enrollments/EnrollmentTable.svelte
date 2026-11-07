@@ -1,10 +1,13 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import type { Enrollment } from '../types.ts';
+	import type { Enrollment } from '#lib/services/enrollments/types.ts';
 
 	// `show` picks which side of the relationship to list: on a student's page
 	// we show their courses, on a course's page we show its students.
-	let { enrollments, show }: { enrollments: Enrollment[]; show: 'course' | 'student' } = $props();
+	let {
+		enrollments,
+		show,
+		onwithdraw
+	}: { enrollments: Enrollment[]; show: 'course' | 'student'; onwithdraw: (e: Enrollment) => unknown } = $props();
 </script>
 
 {#if enrollments.length === 0}
@@ -28,10 +31,7 @@
 						</td>
 						<td class="text-gray-600">{new Date(e.enrolledAt).toLocaleDateString()}</td>
 						<td class="text-right">
-							<form method="POST" action="?/withdraw" use:enhance>
-								<input type="hidden" name="enrollmentId" value={e.id} />
-								<button class="btn-secondary">Withdraw</button>
-							</form>
+							<button type="button" class="btn-secondary" onclick={() => onwithdraw(e)}>Withdraw</button>
 						</td>
 					</tr>
 				{/each}

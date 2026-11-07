@@ -1,9 +1,8 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import { fullName, type Teacher } from '#lib/features/teachers/types.ts';
-	import type { Course } from '../types.ts';
+	import { fullName, type Teacher } from '#lib/services/teachers/types.ts';
+	import type { Course } from '#lib/services/courses/types.ts';
 
-	let { courses, teachers }: { courses: Course[]; teachers: Teacher[] } = $props();
+	let { courses, teachers, ondelete }: { courses: Course[]; teachers: Teacher[]; ondelete: (course: Course) => unknown } = $props();
 
 	// $derived recomputes only when `teachers` changes.
 	const teacherById = $derived(new Map(teachers.map((t) => [t.id, t])));
@@ -32,12 +31,13 @@
 						</td>
 						<td>{course.capacity}</td>
 						<td class="text-right">
-							<form method="POST" action="?/delete" use:enhance>
-								<input type="hidden" name="id" value={course.id} />
-								<button class="btn-danger" onclick={(e) => confirm(`Delete ${course.code}?`) || e.preventDefault()}>
-									Delete
-								</button>
-							</form>
+							<button
+								type="button"
+								class="btn-danger"
+								onclick={() => confirm(`Delete ${course.code}?`) && ondelete(course)}
+							>
+								Delete
+							</button>
 						</td>
 					</tr>
 				{/each}

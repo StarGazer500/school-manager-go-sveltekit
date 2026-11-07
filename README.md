@@ -49,7 +49,7 @@ Settings (environment variables):
 | -------- | --------- | ------------------------------ |
 | backend  | `PORT`    | `8080`                         |
 | backend  | `DB_PATH` | `school.db`                    |
-| frontend | `API_URL` | `http://localhost:8080/api/v1` |
+| frontend | `API_TARGET` | `http://localhost:8080` (where the dev proxy sends `/api`) |
 
 ## Backend layout
 
@@ -121,88 +121,111 @@ curl -X POST localhost:8080/api/v1/students \
 
 ## Frontend layout
 
+The frontend is a **static single page app**, organised like MyApp's web project:
+thin routes, feature components that fetch their own data, and a services layer that
+talks to the API. `adapter-static` builds it into plain HTML, JS and CSS in
+`frontend/build/`, which nginx or a CDN can serve. No Node process runs in production.
+
 ```
-frontend/src/
-├── env.ts                         declares API_URL (read via `$app/env/private`)
-├── app.css                        Tailwind import + a few shared classes (.btn, .input, .card, …)
-├── lib/
-│   ├── server/api.ts              server-only fetch wrapper, ApiError, form-failure helpers
-│   ├── ui/                        shared, feature-agnostic components
-│   └── features/
-│       ├── students/
-│       │   ├── types.ts           TS mirror of the Go DTOs
-│       │   ├── api.server.ts      calls to /students (server-only)
-│       │   ├── form.ts            FormData → StudentInput
-│       │   └── components/        StudentForm, StudentTable
-│       ├── teachers/              same shape
-│       ├── courses/               same shape
-│       └── enrollments/           api + shared enroll/withdraw actions + components
-└── routes/                        thin pages that load data and delegate to features
-    ├── +page(.server).ts/.svelte  dashboard
-    ├── students/                  list · new/ · [id]/ (edit + enrollments)
-    ├── teachers/                  list · new/ · [id]/ (edit + courses taught)
-    └── courses/                   list · new/ · [id]/ (edit + roster)
+frontend/
+├── nginx.conf                     production example: serves build/, forwards /api to Go
+├── vite.config.ts                 adapter-static (fallback 200.html) + dev proxy for /api
+└── src/
+    ├── app.css                    Tailwind import + a few shared classes (.btn, .input, .card, …)
+    ├── lib/
+    │   ├── services/              API calls only, no UI
+    │   │   ├── shared.ts          request() → { success, message, data }, never throws
+    │   │   ├── students/
+    │   │   │   ├── index.ts       readStudents, readStudent, createStudent, updateStudent, deleteStudent
+    │   │   │   └── types.ts       TS mirror of the Go DTOs
+    │   │   ├── teachers/          same shape
+    │   │   ├── courses/           same shape
+    │   │   └── enrollments/       readEnrollments, enroll, withdraw
+    │   ├── features/              UI, one folder per feature, files named after their component
+    │   │   ├── dashboard/Dashboard.svelte
+    │   │   ├── students/
+    │   │   │   ├── StudentList.svelte     list + search + delete (fetches its own data)
+    │   │   │   ├── NewStudent.svelte      create page
+    │   │   │   ├── StudentDetails.svelte  edit + enrollments
+    │   │   │   ├── StudentForm.svelte     the form, used by NewStudent and StudentDetails
+    │   │   │   ├── StudentTable.svelte
+    │   │   │   └── form.ts                FormData → StudentInput
+    │   │   ├── teachers/          same shape (TeacherList, NewTeacher, …)
+    │   │   ├── courses/           same shape (CourseList, NewCourse, …)
+    │   │   └── enrollments/       EnrollForm.svelte, EnrollmentTable.svelte
+    │   └── ui/
+    │       ├── FormError.svelte   inline error for the current page
+    │       ├── flash.svelte.ts    shared success message ("Student deleted"), see below
+    │       └── Flash.svelte       shows it at the top of every page (in +layout.svelte)
+    └── routes/                    one line each: render the feature component
+        ├── +layout.ts             ssr = false: everything renders in the browser
+        ├── +page.svelte           <Dashboard />
+        ├── students/              <StudentList /> · new/ <NewStudent /> · [id]/ <StudentDetails id=… />
+        ├── teachers/              same
+        └── courses/               same
 ```
 
 How the frontend talks to the backend:
 
-- **Only the SvelteKit server talks to Go.** `load` functions in `+page.server.ts` fetch data,
-  and **form actions** handle writes. The browser never calls the Go API directly, so there
-  is no CORS to configure and `API_URL` stays private. `*.server.ts` files and anything under
-  `/server/` can't be imported into browser code.
-- **Forms work without JavaScript.** They are plain `<form method="POST">`. `use:enhance`
-  upgrades them to fetch requests without a page reload when JS is available.
-- **Errors.** A 4xx from Go becomes `fail(status, { error, values })`, so the page shows the
-  message and re-fills the form. A 404 in `load` shows the 404 page. 5xx or a backend that
-  is down shows `+error.svelte`.
-- **Tailwind CSS 4** handles styling, mostly as utility classes in the markup. The forms
-  plugin gives inputs a clean default look.
-- **Svelte 5 runes** are used throughout: `$props()`, `$derived()`.
+- **Components fetch their own data.** A feature component calls a service function when
+  it mounts and keeps the result in `$state` (`busy`, `error` and the data). List pages use
+  `$effect` instead of `onMount` so they fetch again when `?q=` changes. Detail pages do
+  the same when the `id` changes, because the router keeps the component mounted.
+- **Services never throw.** Every call returns `{ success, message, data }`, like MyApp's
+  `services/shared.ts`. A component checks `ret.success` and puts `ret.message` in
+  `FormError`. The message is Go's text for a 4xx, "Could not reach the API" when Go is
+  down, and a generic message for other 5xx errors.
+- **Same origin, so no CORS.** The browser calls `/api/v1/...` on its own origin. In dev,
+  Vite proxies `/api` to Go (`API_TARGET`). In production, nginx does the same
+  (`nginx.conf`).
+- **Forms need JavaScript.** `StudentForm` (and the other forms) stops the browser's own submit, parses the
+  fields (`form.ts`) and calls the page's `onsave`. Tables call `ondelete` and `onwithdraw`.
+- **Tailwind CSS 4** handles styling, mostly as utility classes in the markup.
+- **Svelte 5 runes** are used throughout: `$props()`, `$state()`, `$derived()`, `$effect()`.
 - **Imports** use `#lib/...` (Node subpath imports, defined in `package.json`). This is the
   SvelteKit 3 replacement for `$lib`.
 
 ### Reminder: who talks to whom
 
 ```
-Browser  ⇄  SvelteKit server  ⇄  Go API  ⇄  SQLite
-         (HTML, form posts)   (JSON over HTTP)
+dev:   Browser  ⇄  Vite (5173)  ─/api→  Go API  ⇄  SQLite
+prod:  Browser  ⇄  nginx        ─/api→  Go API  ⇄  SQLite
+                (static files + JSON)
 ```
 
-The browser only talks to SvelteKit, and only SvelteKit talks to Go. SvelteKit acts as
-the frontend's own backend.
-
-**`data` vs `form` on a page**, using [courses/new](frontend/src/routes/courses/new/+page.svelte) as the example:
-
-```svelte
-<CourseForm values={form?.values} teachers={data.teachers} />
-```
-
-- **`data`** is what the server gives you when the page *loads*. `load()` in
-  `+page.server.ts` fetches teachers from Go, and they arrive as `data.teachers`
-  (the dropdown options). `load()` re-runs after every form submit.
-- **`form`** is what the server gives back after you *submit*. It is `undefined` until a
-  submit happens, and it only has content if the submit failed.
-
-What happens on submit:
+What happens on submit, using [NewCourse.svelte](frontend/src/lib/features/courses/NewCourse.svelte) as the example:
 
 1. The user types. The text stays in the browser's input fields; nothing tracks keystrokes.
-2. On submit, the browser sends the fields as form data to the SvelteKit action.
-3. The action parses it (`parseCourseForm`) and sends it as JSON to Go (`api()` in `lib/server/api.ts`).
-4. **Success:** `redirect(303, ...)` goes to the new course's page.
-   **Failure:** `failFromApi` returns `fail(status, { error, values })`.
-5. The page re-renders with that object as `form`. `FormError` shows `form.error`, and
-   `CourseForm` refills its inputs from `form.values`, so the user doesn't have to retype.
+2. On submit, `CourseForm` calls `preventDefault()`, parses the fields and calls `onsave(input)`.
+3. `NewCourse` calls `createCourse(input)` from `services/courses`, which sends JSON to Go.
+4. **Success:** `goto('/courses/<id>')` opens the new course.
+   **Failure:** `error = ret.message` and `FormError` shows it. Nothing re-renders the form,
+   so what the user typed stays put.
 
-`values` is just a name chosen here, not a SvelteKit keyword. On edit pages,
-`values={form?.values ?? data.course}` means "show the unsaved input if a save failed,
-otherwise show the saved record."
+On a details page, a successful save sets `saved` and fetches the record again.
+
+**Success messages** use the one piece of shared state in the app,
+[flash.svelte.ts](frontend/src/lib/ui/flash.svelte.ts). It is a `.svelte.ts` file because
+the page that sets the message is often not the page that shows it: `StudentDetails`
+deletes the student, runs `await goto('/students')`, then calls `showMessage(...)`, and the
+list page shows "Student deleted". The layout clears the message on every navigation.
+
+## Production build
+
+```bash
+cd frontend && make build     # writes build/ (200.html + _app/ + static files)
+make preview                  # serves build/ locally with the same /api proxy
+```
+
+To deploy, copy `build/` and `nginx.conf` into an nginx container. Change `api:8080` in
+`nginx.conf` to wherever the Go API runs.
 
 ## Ideas for next steps
 
 - Add a feature end to end, e.g. `grades` (student × course × score): schema → model →
-  repo → service → handler → routes on the backend, then types → api → components → route
+  repo → service → handler → routes on the backend, then service → feature components → route
   on the frontend.
 - Write service tests with a fake `Repository`. The interfaces are there for that.
 - Add pagination (`?page=&limit=`) to the list endpoints.
-- Add auth: a Gin middleware plus SvelteKit `hooks.server.ts` with `locals.user`.
+- Add auth: a Gin middleware that checks a token, plus sending that token from `lib/api.ts`.
 - Move the capacity check into a transaction so concurrent enrollments can't overfill a course.

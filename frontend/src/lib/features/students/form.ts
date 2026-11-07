@@ -1,4 +1,4 @@
-import type { StudentInput } from './types.ts';
+import type { StudentInput } from '#lib/services/students/types.ts';
 
 /** Reads a submitted StudentForm. Validation itself happens in the Go API. */
 export function parseStudentForm(data: FormData): StudentInput {

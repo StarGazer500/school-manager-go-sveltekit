@@ -1,4 +1,4 @@
-import type { CourseInput } from './types.ts';
+import type { CourseInput } from '#lib/services/courses/types.ts';
 
 export function parseCourseForm(data: FormData): CourseInput {
 	const teacherId = Number(data.get('teacherId'));

@@ -1,22 +1,29 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import { fullName, type Teacher } from '#lib/features/teachers/types.ts';
-	import type { CourseInput } from '../types.ts';
+	import { fullName, type Teacher } from '#lib/services/teachers/types.ts';
+	import { parseCourseForm } from './form.ts';
+	import type { CourseInput } from '#lib/services/courses/types.ts';
 
 	let {
 		values,
 		teachers,
-		action = '',
+		onsave,
 		submitLabel = 'Save'
 	}: {
 		values?: Partial<CourseInput>;
 		teachers: Teacher[];
-		action?: string;
+		onsave: (input: CourseInput) => unknown;
 		submitLabel?: string;
 	} = $props();
+
+	// The page decides what saving means (create or update); this component only
+	// stops the browser's own submit and hands over the parsed values.
+	function submit(e: SubmitEvent & { currentTarget: HTMLFormElement }) {
+		e.preventDefault();
+		onsave(parseCourseForm(new FormData(e.currentTarget)));
+	}
 </script>
 
-<form method="POST" {action} class="card grid max-w-lg gap-4" use:enhance>
+<form class="card grid max-w-lg gap-4" onsubmit={submit}>
 	<div class="grid gap-4 sm:grid-cols-[10rem_1fr]">
 		<label class="grid gap-1 text-sm font-medium text-gray-700">
 			Code

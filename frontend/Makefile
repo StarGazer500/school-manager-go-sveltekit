@@ -1,7 +1,7 @@
 # Run `make` or `make help` to list targets.
 
 SHELL   := /bin/bash
-API_URL ?= http://localhost:8080/api/v1
+API_TARGET ?= http://localhost:8080
 NVM_DIR ?= $(HOME)/.nvm
 
 # nvm is a shell function, not a program, so it has to be loaded in each
@@ -20,13 +20,13 @@ install: ## Install npm dependencies
 	$(NODE) npm install
 
 dev: node_modules ## Start the dev server on http://localhost:5173
-	$(NODE) API_URL=$(API_URL) npm run dev
+	$(NODE) API_TARGET=$(API_TARGET) npm run dev
 
-build: node_modules ## Production build
+build: node_modules ## Static production build into build/
 	$(NODE) npm run build
 
 preview: build ## Serve the production build locally
-	$(NODE) API_URL=$(API_URL) npm run preview
+	$(NODE) API_TARGET=$(API_TARGET) npm run preview
 
 check: node_modules ## Type-check (svelte-check)
 	$(NODE) npm run check

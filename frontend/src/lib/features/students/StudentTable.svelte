@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import { fullName, type Student } from '../types.ts';
+	import { fullName, type Student } from '#lib/services/students/types.ts';
 
-	let { students }: { students: Student[] } = $props();
+	let { students, ondelete }: { students: Student[]; ondelete: (student: Student) => unknown } = $props();
 </script>
 
 {#if students.length === 0}
@@ -20,15 +19,13 @@
 						<td class="text-gray-600">{student.email}</td>
 						<td>{student.gradeLevel}</td>
 						<td class="text-right">
-							<form method="POST" action="?/delete" use:enhance>
-								<input type="hidden" name="id" value={student.id} />
-								<button
-									class="btn-danger"
-									onclick={(e) => confirm(`Delete ${fullName(student)}?`) || e.preventDefault()}
-								>
-									Delete
-								</button>
-							</form>
+							<button
+								type="button"
+								class="btn-danger"
+								onclick={() => confirm(`Delete ${fullName(student)}?`) && ondelete(student)}
+							>
+								Delete
+							</button>
 						</td>
 					</tr>
 				{/each}

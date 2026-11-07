@@ -1,4 +1,4 @@
-import type { TeacherInput } from './types.ts';
+import type { TeacherInput } from '#lib/services/teachers/types.ts';
 
 export function parseTeacherForm(data: FormData): TeacherInput {
 	return {

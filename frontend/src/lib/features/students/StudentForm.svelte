@@ -1,16 +1,22 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import type { StudentInput } from '../types.ts';
+	import { parseStudentForm } from './form.ts';
+	import type { StudentInput } from '#lib/services/students/types.ts';
 
 	let {
 		values,
-		action = '',
+		onsave,
 		submitLabel = 'Save'
-	}: { values?: Partial<StudentInput>; action?: string; submitLabel?: string } = $props();
+	}: { values?: Partial<StudentInput>; onsave: (input: StudentInput) => unknown; submitLabel?: string } = $props();
+
+	// The page decides what saving means (create or update); this component only
+	// stops the browser's own submit and hands over the parsed values.
+	function submit(e: SubmitEvent & { currentTarget: HTMLFormElement }) {
+		e.preventDefault();
+		onsave(parseStudentForm(new FormData(e.currentTarget)));
+	}
 </script>
 
-<!-- use:enhance submits with fetch instead of a full page reload; without JS it still works. -->
-<form method="POST" {action} class="card grid max-w-lg gap-4" use:enhance>
+<form class="card grid max-w-lg gap-4" onsubmit={submit}>
 	<div class="grid gap-4 sm:grid-cols-2">
 		<label class="grid gap-1 text-sm font-medium text-gray-700">
 			First name
