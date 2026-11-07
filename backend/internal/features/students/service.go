@@ -20,7 +20,7 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Student, error) {
 	return s.repo.List(ctx, f)
 }
 
-func (s *Service) Get(ctx context.Context, id uint) (Student, error) {
+func (s *Service) Get(ctx context.Context, id int64) (Student, error) {
 	return s.repo.FindByID(ctx, id)
 }
 
@@ -33,7 +33,7 @@ func (s *Service) Create(ctx context.Context, in StudentInput) (Student, error) 
 	return st, nil
 }
 
-func (s *Service) Update(ctx context.Context, id uint, in StudentInput) (Student, error) {
+func (s *Service) Update(ctx context.Context, id int64, in StudentInput) (Student, error) {
 	st, err := s.repo.FindByID(ctx, id)
 	if err != nil {
 		return Student{}, err
@@ -45,7 +45,7 @@ func (s *Service) Update(ctx context.Context, id uint, in StudentInput) (Student
 	return st, nil
 }
 
-func (s *Service) Delete(ctx context.Context, id uint) error {
+func (s *Service) Delete(ctx context.Context, id int64) error {
 	return s.repo.Delete(ctx, id)
 }
 

@@ -88,12 +88,12 @@ func UseJSONFieldNames() {
 }
 
 // IDParam parses a positive integer path parameter such as /students/:id.
-func IDParam(c *gin.Context, name string) (uint, error) {
+func IDParam(c *gin.Context, name string) (int64, error) {
 	return parseID(c.Param(name), name)
 }
 
 // OptionalIDQuery parses ?name=123, returning 0 when the parameter is absent.
-func OptionalIDQuery(c *gin.Context, name string) (uint, error) {
+func OptionalIDQuery(c *gin.Context, name string) (int64, error) {
 	raw := c.Query(name)
 	if raw == "" {
 		return 0, nil
@@ -101,10 +101,10 @@ func OptionalIDQuery(c *gin.Context, name string) (uint, error) {
 	return parseID(raw, name)
 }
 
-func parseID(raw, name string) (uint, error) {
-	id, err := strconv.ParseUint(raw, 10, 64)
-	if err != nil || id == 0 {
+func parseID(raw, name string) (int64, error) {
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
 		return 0, apperr.Invalid("%s must be a positive integer", name)
 	}
-	return uint(id), nil
+	return id, nil
 }

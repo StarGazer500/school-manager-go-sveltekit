@@ -14,7 +14,7 @@ type StudentInput struct {
 // StudentResponse is what clients see. Keeping it separate from the entity
 // means the database shape can change without breaking the API.
 type StudentResponse struct {
-	ID         uint      `json:"id"`
+	ID         int64     `json:"id"`
 	FirstName  string    `json:"firstName"`
 	LastName   string    `json:"lastName"`
 	Email      string    `json:"email"`

@@ -3,15 +3,15 @@ package enrollments
 import "time"
 
 type EnrollInput struct {
-	StudentID uint `json:"studentId" binding:"required"`
-	CourseID  uint `json:"courseId"  binding:"required"`
+	StudentID int64 `json:"studentId" binding:"required,min=1"`
+	CourseID  int64 `json:"courseId"  binding:"required,min=1"`
 }
 
 type EnrollmentResponse struct {
-	ID          uint      `json:"id"`
-	StudentID   uint      `json:"studentId"`
+	ID          int64     `json:"id"`
+	StudentID   int64     `json:"studentId"`
 	StudentName string    `json:"studentName"`
-	CourseID    uint      `json:"courseId"`
+	CourseID    int64     `json:"courseId"`
 	CourseCode  string    `json:"courseCode"`
 	CourseName  string    `json:"courseName"`
 	EnrolledAt  time.Time `json:"enrolledAt"`

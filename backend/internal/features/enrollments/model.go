@@ -4,19 +4,22 @@ import "time"
 
 // Enrollment is the database entity for the "enrollments" table.
 type Enrollment struct {
-	ID         uint
-	StudentID  uint
-	CourseID   uint
-	EnrolledAt time.Time
+	ID         int64     `db:"id"`
+	StudentID  int64     `db:"student_id"`
+	CourseID   int64     `db:"course_id"`
+	EnrolledAt time.Time `db:"enrolled_at"`
 }
 
-// Detail is a read model: an enrollment joined with the student and course
-// names, so clients don't need extra requests to display it.
+func (Enrollment) TableName() string { return "enrollments" }
+
+// Detail is a read model: an enrollment plus the student and course names,
+// so clients don't need extra requests to display it. It isn't a table; the
+// repository assembles it.
 type Detail struct {
-	ID          uint
-	StudentID   uint
+	ID          int64
+	StudentID   int64
 	StudentName string
-	CourseID    uint
+	CourseID    int64
 	CourseCode  string
 	CourseName  string
 	EnrolledAt  time.Time
@@ -24,6 +27,6 @@ type Detail struct {
 
 // ListFilter narrows List results. Zero values mean "no filter".
 type ListFilter struct {
-	StudentID uint
-	CourseID  uint
+	StudentID int64
+	CourseID  int64
 }

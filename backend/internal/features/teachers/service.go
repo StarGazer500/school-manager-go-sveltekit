@@ -18,7 +18,7 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Teacher, error) {
 	return s.repo.List(ctx, f)
 }
 
-func (s *Service) Get(ctx context.Context, id uint) (Teacher, error) {
+func (s *Service) Get(ctx context.Context, id int64) (Teacher, error) {
 	return s.repo.FindByID(ctx, id)
 }
 
@@ -31,7 +31,7 @@ func (s *Service) Create(ctx context.Context, in TeacherInput) (Teacher, error) 
 	return t, nil
 }
 
-func (s *Service) Update(ctx context.Context, id uint, in TeacherInput) (Teacher, error) {
+func (s *Service) Update(ctx context.Context, id int64, in TeacherInput) (Teacher, error) {
 	t, err := s.repo.FindByID(ctx, id)
 	if err != nil {
 		return Teacher{}, err
@@ -45,7 +45,7 @@ func (s *Service) Update(ctx context.Context, id uint, in TeacherInput) (Teacher
 
 // Delete removes a teacher. Their courses stay, with teacher_id set to NULL
 // (see the ON DELETE SET NULL in the courses schema).
-func (s *Service) Delete(ctx context.Context, id uint) error {
+func (s *Service) Delete(ctx context.Context, id int64) error {
 	return s.repo.Delete(ctx, id)
 }
 

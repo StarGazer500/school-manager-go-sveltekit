@@ -13,7 +13,7 @@ import (
 // narrow: courses.Service satisfies it without knowing enrollments exists,
 // and tests can pass a tiny fake instead.
 type CourseReader interface {
-	Get(ctx context.Context, id uint) (courses.Course, error)
+	Get(ctx context.Context, id int64) (courses.Course, error)
 }
 
 type Service struct {
@@ -55,6 +55,6 @@ func (s *Service) Enroll(ctx context.Context, in EnrollInput) (Detail, error) {
 	return s.repo.FindDetail(ctx, e.ID)
 }
 
-func (s *Service) Withdraw(ctx context.Context, id uint) error {
+func (s *Service) Withdraw(ctx context.Context, id int64) error {
 	return s.repo.Delete(ctx, id)
 }

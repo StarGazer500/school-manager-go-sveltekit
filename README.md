@@ -6,29 +6,39 @@ feature-based layout: code is grouped by business feature, not by technical laye
 
 ```
 gosvelte/
-├── backend/    Go + Gin + database/sql + SQLite → http://localhost:8080
-└── frontend/   SvelteKit 3 + Svelte 5     → http://localhost:5173
+├── backend/    Go + Gin + pgrepo + PostgreSQL → http://localhost:8080
+└── frontend/   SvelteKit 3 + Svelte 5         → http://localhost:5173
 ```
+
+You need **Go 1.23+**, **Node 22.17+** and **Docker** (for PostgreSQL).
 
 ## Running it
 
 With `make`, from the project root:
 
 ```bash
-make dev        # backend on :8080 + frontend on :5173 (Ctrl+C stops both)
+make dev        # Postgres (Docker) + backend on :8080 + frontend on :5173 (Ctrl+C stops the servers)
 make check      # go vet/test + svelte-check
 ```
 
 Each folder has its own Makefile too. Run `make` in `backend/` or `frontend/` to list
-the targets (`run`, `build`, `reset-db`, `dev`, `check`, …). The frontend Makefile
-switches to the Node version in `.nvmrc` automatically.
+the targets (`run`, `db-up`, `db-down`, `db-reset`, `db-shell`, `migrate-*`, `dev`, `check`, …). The
+frontend Makefile switches to the Node version in `.nvmrc` automatically. Postgres keeps
+running after Ctrl+C; stop it with `make -C backend db-down`.
+
+> **pgrepo is a private module.** Go can only download it with
+> `GOPRIVATE=github.com/StarGazer500` set (and SSH access to the repo). `backend/Makefile`
+> sets this for you. If you run `go` commands directly, export it first, or run
+> `go env -w GOPRIVATE=github.com/StarGazer500` once.
 
 Without `make`:
 
-**Backend** (Go 1.23+). This creates `school.db` on first run:
+**Backend.** The API applies the database migrations itself when it starts:
 
 ```bash
 cd backend
+docker compose up -d --wait db              # PostgreSQL on localhost:5433
+export GOPRIVATE=github.com/StarGazer500
 go run ./cmd/api
 ```
 
@@ -45,30 +55,37 @@ Open http://localhost:5173. Try creating a teacher, then a course, then a studen
 
 Settings (environment variables):
 
-| Where    | Variable  | Default                        |
-| -------- | --------- | ------------------------------ |
-| backend  | `PORT`    | `8080`                         |
-| backend  | `DB_PATH` | `school.db`                    |
-| frontend | `API_TARGET` | `http://localhost:8080` (where the dev proxy sends `/api`) |
+| Where    | Variable       | Default                                                    |
+| -------- | -------------- | ---------------------------------------------------------- |
+| backend  | `PORT`         | `8080`                                                     |
+| backend  | `DATABASE_URL` | `postgres://school:school@localhost:5433/school?sslmode=disable` |
+| frontend | `API_TARGET`   | `http://localhost:8080` (where the dev proxy sends `/api`) |
+
+The database runs from [backend/docker-compose.yml](backend/docker-compose.yml) on port
+**5433**, so it doesn't clash with another Postgres on the default 5432. Its data lives in
+a Docker volume and survives restarts; `make -C backend db-reset` deletes it.
 
 ## Backend layout
 
 ```
 backend/
-├── cmd/api/main.go              entrypoint: config → DB → migrate → server → graceful shutdown
+├── docker-compose.yml           PostgreSQL 18 for local development
+├── migrations/                  numbered SQL files (goose), embedded into the binary
+├── cmd/
+│   ├── api/main.go              entrypoint: config → DB → migrate → server → graceful shutdown
+│   └── migrate/main.go          `make migrate-*` commands: up, down, status, new
 └── internal/
     ├── config/                  env vars
-    ├── database/                open SQLite, run schemas, map SQLite errors → app errors
+    ├── database/                open the pgx pool, run migrations, map Postgres errors → app errors
     ├── server/server.go         composition root: wires every feature together
     ├── shared/
     │   ├── apperr/              error kinds: NotFound / Conflict / Invalid
     │   └── httpx/               Gin helpers: error → HTTP status, ID parsing, validation messages
     └── features/
         ├── students/
-        │   ├── schema.go        CREATE TABLE owned by this feature
-        │   ├── model.go         DB entity (+ list filter)
+        │   ├── model.go         DB entity with `db` tags + TableName() (+ list filter)
         │   ├── dto.go           JSON request/response shapes + mapping
-        │   ├── repository.go    interface + plain SQL implementation
+        │   ├── repository.go    interface + pgrepo implementation
         │   ├── service.go       business rules (no HTTP, no SQL)
         │   ├── handler.go       HTTP ↔ service
         │   └── routes.go        mounts endpoints
@@ -82,7 +99,9 @@ A request flows **router → handler → service → repository → DB**, and ea
 - **Handler**: parse/validate input (`ShouldBindJSON` + `binding:` tags), call the service, write JSON.
 - **Service**: business rules, e.g. "a course can't take more students than its capacity"
   ([enrollments/service.go](backend/internal/features/enrollments/service.go)).
-- **Repository**: SQL only. It returns `apperr` errors so services never see SQL or driver errors.
+- **Repository**: database access only, through [pgrepo](https://github.com/StarGazer500/pgrepo),
+  which writes the SQL from each model's `db` tags. It returns `apperr` errors, so services
+  never see SQL or driver errors.
 - **Errors**: services return `apperr.NotFound(...)` and similar, and `httpx.Error` turns them into 404/409/400.
   Unknown errors become 500 and are logged.
 
@@ -91,11 +110,52 @@ Things worth reading in the code:
 - **Cross-feature dependency.** `enrollments` needs to look up courses. It defines a tiny
   `CourseReader` interface on *its* side, and `courses.Service` happens to satisfy it.
   The two features stay loosely coupled.
-- **The database enforces integrity.** Foreign keys are real (`PRAGMA foreign_keys`).
-  Deleting a teacher sets their courses' `teacher_id` to NULL, and deleting a student or
-  course cascades to its enrollments.
-- **Read models.** `enrollments.Detail` is a JOIN result (student name, course code). It is
-  not a table.
+- **The database enforces integrity.** Deleting a teacher sets their courses' `teacher_id`
+  to NULL, and deleting a student or course cascades to its enrollments. Postgres doesn't
+  index foreign keys by itself, so the migrations add those indexes.
+- **Read models.** `enrollments.Detail` (an enrollment plus the student's name and course
+  code) is not a table. The repository loads the enrollments, then all their students in one
+  query and all their courses in another with `pgrepo.ManyToOne`, instead of one query per row.
+- **pgrepo basics.** `Get`/`Update` return `nil` when no row matches, which the repositories
+  turn into a 404. `Create`/`Update` take a `map[string]any` of columns and return the
+  saved row, so database defaults like `id` and `created_at` come back filled in.
+
+### Database migrations (goose)
+
+The schema lives in [backend/migrations/](backend/migrations/) as numbered SQL files. Each
+file has an **Up** part (apply the change) and a **Down** part (undo it):
+
+```sql
+-- +goose Up
+ALTER TABLE students ADD COLUMN phone TEXT NOT NULL DEFAULT '';
+
+-- +goose Down
+ALTER TABLE students DROP COLUMN phone;
+```
+
+goose keeps a `goose_db_version` table recording which files have run, so each one runs
+exactly once, in order. The API applies new migrations every time it starts.
+
+To change the schema (run these in `backend/`):
+
+```bash
+make migrate-new name=add_phone_to_students   # creates migrations/00005_add_phone_to_students.sql
+# edit the file: write the Up and Down SQL
+make migrate-up                               # apply it (or just restart the API)
+make migrate-status                           # see which migrations have run
+make migrate-down                             # undo the most recent one
+```
+
+Rules of thumb:
+
+- **Never edit a migration that has already run.** goose won't run it again, so the change
+  would never reach the database. Write a new migration instead.
+- **Always write the Down part**, and test it with `migrate-down` then `migrate-up`.
+- After a schema change, update the matching `model.go` (and the DTOs, if the API should
+  expose the new column). pgrepo needs a struct field for every column, so add the field in
+  the same change as the migration.
+- The first four migrations use `CREATE TABLE IF NOT EXISTS` only so that databases created
+  before goose was added could switch over. New migrations don't need it.
 
 ### API
 
@@ -188,8 +248,8 @@ How the frontend talks to the backend:
 ### Reminder: who talks to whom
 
 ```
-dev:   Browser  ⇄  Vite (5173)  ─/api→  Go API  ⇄  SQLite
-prod:  Browser  ⇄  nginx        ─/api→  Go API  ⇄  SQLite
+dev:   Browser  ⇄  Vite (5173)  ─/api→  Go API  ⇄  PostgreSQL
+prod:  Browser  ⇄  nginx        ─/api→  Go API  ⇄  PostgreSQL
                 (static files + JSON)
 ```
 
@@ -222,7 +282,7 @@ To deploy, copy `build/` and `nginx.conf` into an nginx container. Change `api:8
 
 ## Ideas for next steps
 
-- Add a feature end to end, e.g. `grades` (student × course × score): schema → model →
+- Add a feature end to end, e.g. `grades` (student × course × score): migration → model →
   repo → service → handler → routes on the backend, then service → feature components → route
   on the frontend.
 - Write service tests with a fake `Repository`. The interfaces are there for that.

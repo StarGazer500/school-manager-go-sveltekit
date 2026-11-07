@@ -18,7 +18,7 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Course, error) {
 	return s.repo.List(ctx, f)
 }
 
-func (s *Service) Get(ctx context.Context, id uint) (Course, error) {
+func (s *Service) Get(ctx context.Context, id int64) (Course, error) {
 	return s.repo.FindByID(ctx, id)
 }
 
@@ -31,7 +31,7 @@ func (s *Service) Create(ctx context.Context, in CourseInput) (Course, error) {
 	return c, nil
 }
 
-func (s *Service) Update(ctx context.Context, id uint, in CourseInput) (Course, error) {
+func (s *Service) Update(ctx context.Context, id int64, in CourseInput) (Course, error) {
 	c, err := s.repo.FindByID(ctx, id)
 	if err != nil {
 		return Course{}, err
@@ -44,7 +44,7 @@ func (s *Service) Update(ctx context.Context, id uint, in CourseInput) (Course, 
 }
 
 // Delete removes a course and, via ON DELETE CASCADE, its enrollments.
-func (s *Service) Delete(ctx context.Context, id uint) error {
+func (s *Service) Delete(ctx context.Context, id int64) error {
 	return s.repo.Delete(ctx, id)
 }
 

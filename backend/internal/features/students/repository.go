@@ -2,113 +2,108 @@ package students
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
+	"github.com/StarGazer500/pgrepo"
+
 	"github.com/martin/school-api/internal/database"
+	"github.com/martin/school-api/internal/shared/apperr"
 )
 
 // Repository is the persistence contract the service depends on. Because it
 // is an interface, tests can swap in a fake without touching a database.
 type Repository interface {
 	List(ctx context.Context, f ListFilter) ([]Student, error)
-	FindByID(ctx context.Context, id uint) (Student, error)
+	FindByID(ctx context.Context, id int64) (Student, error)
 	Create(ctx context.Context, s *Student) error
 	Update(ctx context.Context, s *Student) error
-	Delete(ctx context.Context, id uint) error
+	Delete(ctx context.Context, id int64) error
 }
 
-type sqlRepository struct {
-	db *sql.DB
+// pgRepository implements Repository with pgrepo, which writes the SQL for
+// each call from the Student struct's db tags.
+type pgRepository struct {
+	rows *pgrepo.Repository[Student]
 }
 
-func NewRepository(db *sql.DB) Repository {
-	return &sqlRepository{db: db}
+func NewRepository(db pgrepo.DBTX) Repository {
+	return &pgRepository{rows: pgrepo.New[Student](db)}
 }
 
-// columns and scanStudent must list the fields in the same order.
-const columns = `id, first_name, last_name, email, grade_level, created_at, updated_at`
-
-func scanStudent(row database.Scanner) (Student, error) {
-	var s Student
-	err := row.Scan(&s.ID, &s.FirstName, &s.LastName, &s.Email, &s.GradeLevel, &s.CreatedAt, &s.UpdatedAt)
-	return s, err
-}
-
-func (r *sqlRepository) List(ctx context.Context, f ListFilter) ([]Student, error) {
-	// Build the WHERE clause from whichever filters are set. Values always go
-	// in args as ? placeholders, never into the SQL string (SQL injection).
-	query := `SELECT ` + columns + ` FROM students WHERE 1=1`
-	var args []any
+func (r *pgRepository) List(ctx context.Context, f ListFilter) ([]Student, error) {
+	// Each filter that is set becomes one condition; pgrepo joins them with AND
+	// and passes values as $1, $2... parameters, never inside the SQL text.
+	var where []pgrepo.Filter
 	if f.Search != "" {
 		like := "%" + f.Search + "%"
-		query += ` AND (first_name LIKE ? OR last_name LIKE ? OR email LIKE ?)`
-		args = append(args, like, like, like)
+		where = append(where, pgrepo.Or(
+			pgrepo.ILike("first_name", like),
+			pgrepo.ILike("last_name", like),
+			pgrepo.ILike("email", like),
+		))
 	}
 	if f.GradeLevel != 0 {
-		query += ` AND grade_level = ?`
-		args = append(args, f.GradeLevel)
+		where = append(where, pgrepo.Eq("grade_level", f.GradeLevel))
 	}
-	query += ` ORDER BY last_name, first_name`
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	return r.rows.Find(ctx, pgrepo.Query{
+		Where:   where,
+		OrderBy: []pgrepo.Order{pgrepo.Asc("last_name"), pgrepo.Asc("first_name")},
+	})
+}
+
+func (r *pgRepository) FindByID(ctx context.Context, id int64) (Student, error) {
+	s, err := r.rows.Get(ctx, id)
 	if err != nil {
-		return nil, err
+		return Student{}, err
 	}
-	defer rows.Close()
-
-	var list []Student
-	for rows.Next() {
-		s, err := scanStudent(rows)
-		if err != nil {
-			return nil, err
-		}
-		list = append(list, s)
+	if s == nil { // pgrepo returns (nil, nil) when no row has this id
+		return Student{}, apperr.NotFound("student not found")
 	}
-	return list, rows.Err()
+	return *s, nil
 }
 
-func (r *sqlRepository) FindByID(ctx context.Context, id uint) (Student, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT `+columns+` FROM students WHERE id = ?`, id)
-	s, err := scanStudent(row)
-	return s, database.MapError(err, "student") // sql.ErrNoRows -> 404
-}
-
-func (r *sqlRepository) Create(ctx context.Context, s *Student) error {
-	now := time.Now().UTC()
-	res, err := r.db.ExecContext(ctx,
-		`INSERT INTO students (first_name, last_name, email, grade_level, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		s.FirstName, s.LastName, s.Email, s.GradeLevel, now, now)
+func (r *pgRepository) Create(ctx context.Context, s *Student) error {
+	// The database fills id, created_at and updated_at; Create returns the
+	// whole new row (INSERT ... RETURNING *), which we copy back into s.
+	created, err := r.rows.Create(ctx, map[string]any{
+		"first_name":  s.FirstName,
+		"last_name":   s.LastName,
+		"email":       s.Email,
+		"grade_level": s.GradeLevel,
+	})
 	if err != nil {
 		return database.MapError(err, "student") // UNIQUE(email) -> 409
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return err
-	}
-	s.ID, s.CreatedAt, s.UpdatedAt = uint(id), now, now
+	*s = *created
 	return nil
 }
 
-func (r *sqlRepository) Update(ctx context.Context, s *Student) error {
-	now := time.Now().UTC()
-	res, err := r.db.ExecContext(ctx,
-		`UPDATE students
-		 SET first_name = ?, last_name = ?, email = ?, grade_level = ?, updated_at = ?
-		 WHERE id = ?`,
-		s.FirstName, s.LastName, s.Email, s.GradeLevel, now, s.ID)
+func (r *pgRepository) Update(ctx context.Context, s *Student) error {
+	updated, err := r.rows.Update(ctx, s.ID, map[string]any{
+		"first_name":  s.FirstName,
+		"last_name":   s.LastName,
+		"email":       s.Email,
+		"grade_level": s.GradeLevel,
+		"updated_at":  time.Now(),
+	})
 	if err != nil {
 		return database.MapError(err, "student")
 	}
-	s.UpdatedAt = now
-	return database.RequireAffected(res, "student")
+	if updated == nil {
+		return apperr.NotFound("student not found")
+	}
+	*s = *updated
+	return nil
 }
 
-func (r *sqlRepository) Delete(ctx context.Context, id uint) error {
-	res, err := r.db.ExecContext(ctx, `DELETE FROM students WHERE id = ?`, id)
+func (r *pgRepository) Delete(ctx context.Context, id int64) error {
+	deleted, err := r.rows.Delete(ctx, id)
 	if err != nil {
-		return database.MapError(err, "student")
+		return err
 	}
-	return database.RequireAffected(res, "student")
+	if !deleted {
+		return apperr.NotFound("student not found")
+	}
+	return nil
 }

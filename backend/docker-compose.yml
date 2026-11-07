@@ -1,0 +1,25 @@
+name: school-manager
+
+# PostgreSQL for local development. Start it with `make db-up`.
+# It listens on 5433 (not the default 5432) so it doesn't clash with another
+# Postgres already running on this machine.
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: school
+      POSTGRES_PASSWORD: school
+      POSTGRES_DB: school
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      # Postgres 18 images keep their data under /var/lib/postgresql/<version>.
+      - school-db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U school -d school"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  school-db:

@@ -4,14 +4,14 @@ import "os"
 
 // Config holds runtime settings, read from environment variables.
 type Config struct {
-	Port   string
-	DBPath string
+	Port        string
+	DatabaseURL string
 }
 
 func Load() Config {
 	return Config{
-		Port:   getEnv("PORT", "8080"),
-		DBPath: getEnv("DB_PATH", "school.db"),
+		Port:        getEnv("PORT", "8080"),
+		DatabaseURL: getEnv("DATABASE_URL", "postgres://school:school@localhost:5433/school?sslmode=disable"),
 	}
 }
 

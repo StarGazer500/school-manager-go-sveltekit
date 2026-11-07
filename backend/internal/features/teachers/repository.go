@@ -2,104 +2,97 @@ package teachers
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
+	"github.com/StarGazer500/pgrepo"
+
 	"github.com/martin/school-api/internal/database"
+	"github.com/martin/school-api/internal/shared/apperr"
 )
 
 type Repository interface {
 	List(ctx context.Context, f ListFilter) ([]Teacher, error)
-	FindByID(ctx context.Context, id uint) (Teacher, error)
+	FindByID(ctx context.Context, id int64) (Teacher, error)
 	Create(ctx context.Context, t *Teacher) error
 	Update(ctx context.Context, t *Teacher) error
-	Delete(ctx context.Context, id uint) error
+	Delete(ctx context.Context, id int64) error
 }
 
-type sqlRepository struct {
-	db *sql.DB
+type pgRepository struct {
+	rows *pgrepo.Repository[Teacher]
 }
 
-func NewRepository(db *sql.DB) Repository {
-	return &sqlRepository{db: db}
+func NewRepository(db pgrepo.DBTX) Repository {
+	return &pgRepository{rows: pgrepo.New[Teacher](db)}
 }
 
-const columns = `id, first_name, last_name, email, subject, created_at, updated_at`
-
-func scanTeacher(row database.Scanner) (Teacher, error) {
-	var t Teacher
-	err := row.Scan(&t.ID, &t.FirstName, &t.LastName, &t.Email, &t.Subject, &t.CreatedAt, &t.UpdatedAt)
-	return t, err
-}
-
-func (r *sqlRepository) List(ctx context.Context, f ListFilter) ([]Teacher, error) {
-	query := `SELECT ` + columns + ` FROM teachers WHERE 1=1`
-	var args []any
+func (r *pgRepository) List(ctx context.Context, f ListFilter) ([]Teacher, error) {
+	var where []pgrepo.Filter
 	if f.Search != "" {
 		like := "%" + f.Search + "%"
-		query += ` AND (first_name LIKE ? OR last_name LIKE ? OR subject LIKE ?)`
-		args = append(args, like, like, like)
+		where = append(where, pgrepo.Or(
+			pgrepo.ILike("first_name", like),
+			pgrepo.ILike("last_name", like),
+			pgrepo.ILike("subject", like),
+		))
 	}
-	query += ` ORDER BY last_name, first_name`
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	return r.rows.Find(ctx, pgrepo.Query{
+		Where:   where,
+		OrderBy: []pgrepo.Order{pgrepo.Asc("last_name"), pgrepo.Asc("first_name")},
+	})
+}
+
+func (r *pgRepository) FindByID(ctx context.Context, id int64) (Teacher, error) {
+	t, err := r.rows.Get(ctx, id)
 	if err != nil {
-		return nil, err
+		return Teacher{}, err
 	}
-	defer rows.Close()
-
-	var list []Teacher
-	for rows.Next() {
-		t, err := scanTeacher(rows)
-		if err != nil {
-			return nil, err
-		}
-		list = append(list, t)
+	if t == nil {
+		return Teacher{}, apperr.NotFound("teacher not found")
 	}
-	return list, rows.Err()
+	return *t, nil
 }
 
-func (r *sqlRepository) FindByID(ctx context.Context, id uint) (Teacher, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT `+columns+` FROM teachers WHERE id = ?`, id)
-	t, err := scanTeacher(row)
-	return t, database.MapError(err, "teacher")
-}
-
-func (r *sqlRepository) Create(ctx context.Context, t *Teacher) error {
-	now := time.Now().UTC()
-	res, err := r.db.ExecContext(ctx,
-		`INSERT INTO teachers (first_name, last_name, email, subject, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		t.FirstName, t.LastName, t.Email, t.Subject, now, now)
+func (r *pgRepository) Create(ctx context.Context, t *Teacher) error {
+	created, err := r.rows.Create(ctx, map[string]any{
+		"first_name": t.FirstName,
+		"last_name":  t.LastName,
+		"email":      t.Email,
+		"subject":    t.Subject,
+	})
 	if err != nil {
 		return database.MapError(err, "teacher")
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return err
-	}
-	t.ID, t.CreatedAt, t.UpdatedAt = uint(id), now, now
+	*t = *created
 	return nil
 }
 
-func (r *sqlRepository) Update(ctx context.Context, t *Teacher) error {
-	now := time.Now().UTC()
-	res, err := r.db.ExecContext(ctx,
-		`UPDATE teachers
-		 SET first_name = ?, last_name = ?, email = ?, subject = ?, updated_at = ?
-		 WHERE id = ?`,
-		t.FirstName, t.LastName, t.Email, t.Subject, now, t.ID)
+func (r *pgRepository) Update(ctx context.Context, t *Teacher) error {
+	updated, err := r.rows.Update(ctx, t.ID, map[string]any{
+		"first_name": t.FirstName,
+		"last_name":  t.LastName,
+		"email":      t.Email,
+		"subject":    t.Subject,
+		"updated_at": time.Now(),
+	})
 	if err != nil {
 		return database.MapError(err, "teacher")
 	}
-	t.UpdatedAt = now
-	return database.RequireAffected(res, "teacher")
+	if updated == nil {
+		return apperr.NotFound("teacher not found")
+	}
+	*t = *updated
+	return nil
 }
 
-func (r *sqlRepository) Delete(ctx context.Context, id uint) error {
-	res, err := r.db.ExecContext(ctx, `DELETE FROM teachers WHERE id = ?`, id)
+func (r *pgRepository) Delete(ctx context.Context, id int64) error {
+	deleted, err := r.rows.Delete(ctx, id)
 	if err != nil {
-		return database.MapError(err, "teacher")
+		return err
 	}
-	return database.RequireAffected(res, "teacher")
+	if !deleted {
+		return apperr.NotFound("teacher not found")
+	}
+	return nil
 }

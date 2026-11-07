@@ -8,16 +8,16 @@ type CourseInput struct {
 	Name        string `json:"name"        binding:"required,max=150"`
 	Description string `json:"description" binding:"max=1000"`
 	Capacity    int    `json:"capacity"    binding:"required,min=1,max=500"`
-	TeacherID   *uint  `json:"teacherId"`
+	TeacherID   *int64 `json:"teacherId"`
 }
 
 type CourseResponse struct {
-	ID          uint      `json:"id"`
+	ID          int64     `json:"id"`
 	Code        string    `json:"code"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
 	Capacity    int       `json:"capacity"`
-	TeacherID   *uint     `json:"teacherId"`
+	TeacherID   *int64    `json:"teacherId"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 }

@@ -2,112 +2,98 @@ package courses
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
+	"github.com/StarGazer500/pgrepo"
+
 	"github.com/martin/school-api/internal/database"
+	"github.com/martin/school-api/internal/shared/apperr"
 )
 
 type Repository interface {
 	List(ctx context.Context, f ListFilter) ([]Course, error)
-	FindByID(ctx context.Context, id uint) (Course, error)
+	FindByID(ctx context.Context, id int64) (Course, error)
 	Create(ctx context.Context, c *Course) error
 	Update(ctx context.Context, c *Course) error
-	Delete(ctx context.Context, id uint) error
+	Delete(ctx context.Context, id int64) error
 }
 
-type sqlRepository struct {
-	db *sql.DB
+type pgRepository struct {
+	rows *pgrepo.Repository[Course]
 }
 
-func NewRepository(db *sql.DB) Repository {
-	return &sqlRepository{db: db}
+func NewRepository(db pgrepo.DBTX) Repository {
+	return &pgRepository{rows: pgrepo.New[Course](db)}
 }
 
-const columns = `id, code, name, description, capacity, teacher_id, created_at, updated_at`
-
-// TeacherID is a *uint: database/sql scans NULL into nil and a number into a
-// new pointer, and passing a nil pointer as an argument writes NULL.
-func scanCourse(row database.Scanner) (Course, error) {
-	var c Course
-	err := row.Scan(&c.ID, &c.Code, &c.Name, &c.Description, &c.Capacity, &c.TeacherID, &c.CreatedAt, &c.UpdatedAt)
-	return c, err
-}
-
-func (r *sqlRepository) List(ctx context.Context, f ListFilter) ([]Course, error) {
-	query := `SELECT ` + columns + ` FROM courses WHERE 1=1`
-	var args []any
+func (r *pgRepository) List(ctx context.Context, f ListFilter) ([]Course, error) {
+	var where []pgrepo.Filter
 	if f.Search != "" {
 		like := "%" + f.Search + "%"
-		query += ` AND (code LIKE ? OR name LIKE ?)`
-		args = append(args, like, like)
+		where = append(where, pgrepo.Or(pgrepo.ILike("code", like), pgrepo.ILike("name", like)))
 	}
 	if f.TeacherID != 0 {
-		query += ` AND teacher_id = ?`
-		args = append(args, f.TeacherID)
+		where = append(where, pgrepo.Eq("teacher_id", f.TeacherID))
 	}
-	query += ` ORDER BY code`
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var list []Course
-	for rows.Next() {
-		c, err := scanCourse(rows)
-		if err != nil {
-			return nil, err
-		}
-		list = append(list, c)
-	}
-	return list, rows.Err()
+	return r.rows.Find(ctx, pgrepo.Query{Where: where, OrderBy: []pgrepo.Order{pgrepo.Asc("code")}})
 }
 
-func (r *sqlRepository) FindByID(ctx context.Context, id uint) (Course, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT `+columns+` FROM courses WHERE id = ?`, id)
-	c, err := scanCourse(row)
-	return c, database.MapError(err, "course")
+func (r *pgRepository) FindByID(ctx context.Context, id int64) (Course, error) {
+	c, err := r.rows.Get(ctx, id)
+	if err != nil {
+		return Course{}, err
+	}
+	if c == nil {
+		return Course{}, apperr.NotFound("course not found")
+	}
+	return *c, nil
 }
 
 // Create and Update rely on the database's foreign key: an unknown teacherId
-// fails with a FOREIGN KEY constraint error, which MapError turns into a 400.
-func (r *sqlRepository) Create(ctx context.Context, c *Course) error {
-	now := time.Now().UTC()
-	res, err := r.db.ExecContext(ctx,
-		`INSERT INTO courses (code, name, description, capacity, teacher_id, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		c.Code, c.Name, c.Description, c.Capacity, c.TeacherID, now, now)
+// fails with a foreign key violation, which MapError turns into a 400.
+// A nil TeacherID is written as NULL.
+func (r *pgRepository) Create(ctx context.Context, c *Course) error {
+	created, err := r.rows.Create(ctx, map[string]any{
+		"code":        c.Code,
+		"name":        c.Name,
+		"description": c.Description,
+		"capacity":    c.Capacity,
+		"teacher_id":  c.TeacherID,
+	})
 	if err != nil {
 		return database.MapError(err, "course")
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return err
-	}
-	c.ID, c.CreatedAt, c.UpdatedAt = uint(id), now, now
+	*c = *created
 	return nil
 }
 
-func (r *sqlRepository) Update(ctx context.Context, c *Course) error {
-	now := time.Now().UTC()
-	res, err := r.db.ExecContext(ctx,
-		`UPDATE courses
-		 SET code = ?, name = ?, description = ?, capacity = ?, teacher_id = ?, updated_at = ?
-		 WHERE id = ?`,
-		c.Code, c.Name, c.Description, c.Capacity, c.TeacherID, now, c.ID)
+func (r *pgRepository) Update(ctx context.Context, c *Course) error {
+	updated, err := r.rows.Update(ctx, c.ID, map[string]any{
+		"code":        c.Code,
+		"name":        c.Name,
+		"description": c.Description,
+		"capacity":    c.Capacity,
+		"teacher_id":  c.TeacherID,
+		"updated_at":  time.Now(),
+	})
 	if err != nil {
 		return database.MapError(err, "course")
 	}
-	c.UpdatedAt = now
-	return database.RequireAffected(res, "course")
+	if updated == nil {
+		return apperr.NotFound("course not found")
+	}
+	*c = *updated
+	return nil
 }
 
-func (r *sqlRepository) Delete(ctx context.Context, id uint) error {
-	res, err := r.db.ExecContext(ctx, `DELETE FROM courses WHERE id = ?`, id)
+func (r *pgRepository) Delete(ctx context.Context, id int64) error {
+	deleted, err := r.rows.Delete(ctx, id)
 	if err != nil {
-		return database.MapError(err, "course")
+		return err
 	}
-	return database.RequireAffected(res, "course")
+	if !deleted {
+		return apperr.NotFound("course not found")
+	}
+	return nil
 }

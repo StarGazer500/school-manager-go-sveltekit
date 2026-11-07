@@ -11,7 +11,7 @@ type TeacherInput struct {
 }
 
 type TeacherResponse struct {
-	ID        uint      `json:"id"`
+	ID        int64     `json:"id"`
 	FirstName string    `json:"firstName"`
 	LastName  string    `json:"lastName"`
 	Email     string    `json:"email"`

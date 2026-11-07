@@ -3,10 +3,10 @@
 package server
 
 import (
-	"database/sql"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/martin/school-api/internal/features/courses"
 	"github.com/martin/school-api/internal/features/enrollments"
@@ -14,7 +14,7 @@ import (
 	"github.com/martin/school-api/internal/features/teachers"
 )
 
-func New(db *sql.DB) *gin.Engine {
+func New(db *pgxpool.Pool) *gin.Engine {
 	r := gin.Default() // includes Logger and Recovery middleware
 
 	r.GET("/health", func(c *gin.Context) {
