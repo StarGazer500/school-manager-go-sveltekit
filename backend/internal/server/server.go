@@ -3,8 +3,6 @@
 package server
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -15,19 +13,21 @@ import (
 	"github.com/martin/school-api/internal/features/enrollments"
 	"github.com/martin/school-api/internal/features/students"
 	"github.com/martin/school-api/internal/features/teachers"
-	"github.com/martin/school-api/internal/shared"
 )
 
-func New(db *pgxpool.Pool, rdb redis.UniversalClient, log zerolog.Logger) *gin.Engine {
+// New builds the HTTP server. serviceName names the service in traces.
+func New(db *pgxpool.Pool, rdb redis.UniversalClient, log zerolog.Logger, serviceName string) *gin.Engine {
 	// gin.New has no middleware; gin.Default would add Gin's own logger and
-	// recovery, which these two replace. Order matters: RequestLogger first, so
-	// a recovered panic is logged with the request ID and counted as a 500.
+	// recovery, which ours replace. Order matters:
+	//   1. tracing starts the request's span, so everything after is inside it
+	//   2. requestLogger can then put the trace ID in the logs and response
+	//   3. recoverer turns a panic into a 500 that the two above still see
+	// (all three are in middleware.go)
 	r := gin.New()
-	r.Use(shared.RequestLogger(log), shared.Recoverer())
+	r.Use(tracing(serviceName), requestLogger(log), recoverer())
 
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	})
+	r.GET("/healthz", liveness)
+	r.GET("/readyz", readiness(db, rdb))
 
 	api := r.Group("/api/v1")
 

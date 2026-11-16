@@ -1,7 +1,6 @@
 // Package shared holds the code every feature uses:
 //   - commonutils.go: the error kinds services return (NotFound, Conflict,
 //     Invalid) and the Gin helpers handlers use (ErrorResponse, ValidationMessage, IDParam, ...)
-//   - middleware.go:  request logging and panic recovery
 package shared
 
 import (
@@ -16,6 +15,8 @@ import (
 	"github.com/gin-gonic/gin/binding"
 	"github.com/go-playground/validator/v10"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ---------------------------------------------------------------------------
@@ -77,9 +78,14 @@ func ErrorResponse(c *gin.Context, err error) (status int, msg string) {
 	if errors.As(err, &appErr) {
 		msg = appErr.Message
 	} else {
-		// The real error is logged (with this request's ID, via the context)
-		// but never sent to the client.
-		zerolog.Ctx(c.Request.Context()).Error().Err(err).Str("route", c.FullPath()).Msg("unhandled error")
+		// The real error is logged and recorded on the request's span (so the
+		// trace in Grafana shows it), but never sent to the client. The client
+		// gets the trace ID in the X-Trace-ID header to report instead.
+		ctx := c.Request.Context()
+		span := trace.SpanFromContext(ctx)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		zerolog.Ctx(ctx).Error().Err(err).Str("route", c.FullPath()).Msg("unhandled error")
 	}
 	return status, msg
 }

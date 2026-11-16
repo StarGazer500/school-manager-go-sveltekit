@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -21,10 +22,24 @@ const (
 )
 
 // OpenDatabase creates a connection pool for url and checks the database is reachable.
+//
+// Every query becomes a span in the request's trace, showing the SQL and how
+// long it took (pgrepo runs on pgx, so its queries are included), and pool
+// usage (connections in use, idle, waits) is reported as metrics.
 func OpenDatabase(ctx context.Context, url string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, url)
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, fmt.Errorf("DATABASE_URL: %w", err)
+	}
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
+	}
+	if err := otelpgx.RecordStats(pool); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("database metrics: %w", err)
 	}
 	// pgxpool.New connects lazily; Ping makes a bad URL or a stopped server fail at startup.
 	if err := pool.Ping(ctx); err != nil {

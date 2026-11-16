@@ -1,0 +1,49 @@
+# Loki: stores logs and answers LogQL queries for Grafana. Logs arrive from
+# the collector over OTLP (/otlp); trace_id and other fields are kept as
+# "structured metadata", which is what lets Grafana link a line to its trace.
+#
+# Single-binary mode with local disk: fine for one machine; at scale Loki
+# runs as separate components on object storage.
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  allow_structured_metadata: true
+  # How long logs are kept. Deleting needs the compactor below.
+  retention_period: 168h
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+pattern_ingester:
+  enabled: true # powers "Patterns" in Grafana's log drilldown
+
+ruler:
+  alertmanager_url: http://127.0.0.1:9093

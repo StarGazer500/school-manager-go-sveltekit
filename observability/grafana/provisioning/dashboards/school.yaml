@@ -1,0 +1,19 @@
+# Tells Grafana to load every dashboard JSON in /var/lib/grafana/dashboards
+# (mounted from observability/grafana/dashboards) into a "School" folder, and
+# to pick up changes to the files every 10 seconds.
+#
+# Edit a dashboard in the Grafana UI, then "Export → Save to file" and replace
+# the JSON here to keep the change. Edits made only in the UI are lost when
+# the container is recreated: the files are the source of truth.
+apiVersion: 1
+
+providers:
+  - name: school
+    folder: School
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

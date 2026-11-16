@@ -2,6 +2,8 @@
 
 SHELL   := /bin/bash
 API_TARGET ?= http://localhost:8080
+# The git commit, shown with browser telemetry in Grafana (like the API's).
+APP_VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 NVM_DIR ?= $(HOME)/.nvm
 
 # nvm is a shell function, not a program, so it has to be loaded in each
@@ -20,13 +22,13 @@ install: ## Install npm dependencies
 	$(NODE) npm install
 
 dev: node_modules ## Start the dev server on http://localhost:5173
-	$(NODE) API_TARGET=$(API_TARGET) npm run dev
+	$(NODE) API_TARGET=$(API_TARGET) APP_VERSION=$(APP_VERSION) npm run dev
 
 build: node_modules ## Static production build into build/
-	$(NODE) npm run build
+	$(NODE) APP_VERSION=$(APP_VERSION) npm run build
 
 preview: build ## Serve the production build locally
-	$(NODE) API_TARGET=$(API_TARGET) npm run preview
+	$(NODE) API_TARGET=$(API_TARGET) APP_VERSION=$(APP_VERSION) npm run preview
 
 check: node_modules ## Type-check (svelte-check)
 	$(NODE) npm run check

@@ -1,0 +1,160 @@
+# OpenTelemetry Collector: the single entry point for telemetry.
+#
+#   API traces ──OTLP──▶ ┐
+#   browser (Faro) ────▶ ├─ collector ─▶ Tempo (traces)
+#   API log file ──────▶ ┘            └─▶ Loki  (logs)
+#
+# Metrics don't pass through here: Prometheus scrapes the API's /metrics.
+#
+# Why a collector in the middle instead of the app sending straight to Tempo
+# and Loki: the app stays simple and fast, and buffering, retries, sampling
+# and routing are configured here, in one place, for every service.
+#
+# ${env:NAME:-default} reads an environment variable (see docker-compose.yml).
+
+extensions:
+  # /health on :13133, for the container healthcheck.
+  health_check:
+    endpoint: 0.0.0.0:13133
+  # Disk storage, so data survives a collector restart:
+  #   - queue: telemetry waiting to be sent while Tempo or Loki is down
+  #   - offsets: how far each log file has been read
+  file_storage/queue:
+    directory: /var/lib/otelcol/queue
+    create_directory: true
+  file_storage/offsets:
+    directory: /var/lib/otelcol/offsets
+    create_directory: true
+
+receivers:
+  # Traces from the backend (OTLP over HTTP on :4318, gRPC on :4317).
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # Faro: errors, logs, Web Vitals and traces from the browser. The frontend
+  # posts to /collect on its own origin, which Vite (dev) or nginx (prod)
+  # forwards here, so no CORS is needed.
+  faro:
+    endpoint: 0.0.0.0:8027
+
+  # The API's log file: one JSON object per line, written by zerolog.
+  filelog/api:
+    include: [/var/log/school-api/*.log]
+    start_at: beginning
+    storage: file_storage/offsets # remember the read position across restarts
+    resource:
+      service.name: school-api
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.time
+          layout_type: gotime
+          layout: "2006-01-02T15:04:05.999999999Z07:00"
+        severity:
+          parse_from: attributes.level
+      # Link the line to its trace, so Grafana can jump between them.
+      - type: trace_parser
+        trace_id:
+          parse_from: attributes.trace_id
+        span_id:
+          parse_from: attributes.span_id
+      # The message becomes the log body; the other fields stay attributes.
+      - type: move
+        from: attributes.message
+        to: body
+      # Who wrote it: move to resource attributes, like the API's traces.
+      - type: move
+        if: attributes.version != nil
+        from: attributes.version
+        to: resource["service.version"]
+      - type: move
+        if: attributes.env != nil
+        from: attributes.env
+        to: resource["deployment.environment.name"]
+      - type: remove
+        if: attributes.service != nil
+        field: attributes.service
+      - type: remove
+        field: attributes.time
+
+processors:
+  # Refuse data before running out of memory under a traffic spike, instead
+  # of crashing. Must come first in every pipeline.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+
+  # Tail sampling: wait until a trace is complete, then decide whether to
+  # keep it. Keeps every trace that has an error or is slow, and a share of
+  # the rest. The interesting traces are never lost, and storage stays small.
+  tail_sampling:
+    decision_wait: 10s # how long to wait for a trace's last spans
+    num_traces: 50000 # traces held in memory while waiting
+    policies:
+      - name: errors
+        type: status_code
+        status_code: { status_codes: [ERROR] }
+      - name: slow
+        type: latency
+        latency: { threshold_ms: 500 }
+      - name: share-of-the-rest
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: ${env:TRACE_SAMPLING_PERCENT:-25}
+
+  # Send in batches: far fewer requests to Tempo and Loki.
+  batch:
+    send_batch_size: 1024
+    timeout: 5s
+
+exporters:
+  # Both exporters retry with backoff when the backend is down, and queue on
+  # disk meanwhile (up to queue_size batches), so a Tempo or Loki restart
+  # loses nothing.
+  otlp_grpc/tempo:
+    endpoint: tempo:4317
+    tls: { insecure: true }
+    sending_queue:
+      enabled: true
+      storage: file_storage/queue
+      queue_size: 5000
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 10m
+  otlp_http/loki:
+    endpoint: http://loki:3100/otlp
+    tls: { insecure: true }
+    sending_queue:
+      enabled: true
+      storage: file_storage/queue
+      queue_size: 5000
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 10m
+
+service:
+  extensions: [health_check, file_storage/queue, file_storage/offsets]
+  telemetry:
+    # The collector's own metrics (received, dropped, queue size...), scraped
+    # by Prometheus: watch these to know whether telemetry is being lost.
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp, faro]
+      processors: [memory_limiter, tail_sampling, batch]
+      exporters: [otlp_grpc/tempo]
+    logs:
+      receivers: [filelog/api, faro]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/loki]

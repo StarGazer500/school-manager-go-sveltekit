@@ -1,0 +1,64 @@
+# Grafana's data sources, and the links between them that make "follow an
+# error" work:
+#   - Prometheus: exemplar dots on a chart open the trace behind them
+#   - Tempo: a trace opens its logs in Loki, and draws the service graph
+#   - Loki:  the trace_id on a log line opens the trace in Tempo
+# The uids are fixed, so dashboards and alert rules can refer to them.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s # = the scrape interval
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+          urlDisplayLabel: "Trace: $${__value.raw}"
+
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    url: http://tempo:3200
+    editable: false
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki
+        customQuery: true
+        query: '{service_name="$${__span.tags["service.name"]}"} | trace_id="$${__trace.traceId}"'
+        spanStartTimeShift: "-5m"
+        spanEndTimeShift: "5m"
+      serviceMap:
+        datasourceUid: prometheus
+      nodeGraph:
+        enabled: true
+      search:
+        hide: false
+      lokiSearch:
+        datasourceUid: loki
+
+  - name: Loki
+    type: loki
+    uid: loki
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      derivedFields:
+        - name: trace_id
+          matcherType: label
+          matcherRegex: trace_id
+          url: "$${__value.raw}"
+          datasourceUid: tempo
+          urlDisplayLabel: "Trace: $${__value.raw}"
+        # Browser errors from Faro carry the API's trace ID (reported by the
+        # frontend's shared.ts): link from the error to the backend trace.
+        - name: api_trace
+          matcherType: regex
+          matcherRegex: "context_traceId=(\\w+)"
+          url: "$${__value.raw}"
+          datasourceUid: tempo
+          urlDisplayLabel: "API trace: $${__value.raw}"

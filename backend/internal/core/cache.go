@@ -11,20 +11,66 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/StarGazer500/rediscache"
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/martin/school-api/internal/shared"
 )
 
 // NewCache makes a cache of T values whose keys all start with prefix, e.g.
 // core.NewCache[students.Student](rdb, "student:", log). Redis errors the
-// cache works around are logged to log.
+// cache works around are logged to log, and its hits, misses and loads are
+// reported as metrics (see cacheMetrics).
 func NewCache[T any](rdb redis.UniversalClient, prefix string, log zerolog.Logger) *rediscache.Cache[T] {
-	return rediscache.New[T](rdb, options(prefix, log)...)
+	c := rediscache.New[T](rdb, options(prefix, log)...)
+	if err := cacheMetrics(strings.TrimSuffix(prefix, ":"), c.Stats); err != nil {
+		log.Warn().Err(err).Str("cache", prefix).Msg("cache metrics not registered")
+	}
+	return c
+}
+
+// cacheMetrics reports a cache's counters as three metrics, labelled with the
+// cache's name ("student", "teacher"...). In Grafana, the hit rate is
+//
+//	app_cache_hits / (app_cache_hits + app_cache_misses)
+//
+// "Observable" instruments are read when metrics are exported (every 15s)
+// instead of being updated on every call: stats already counts, so the
+// callback just copies its numbers.
+func cacheMetrics(name string, stats func() rediscache.Stats) error {
+	meter := otel.Meter("github.com/martin/school-api/internal/core")
+	hits, err := meter.Int64ObservableCounter("app.cache.hits",
+		metric.WithDescription("Cache lookups answered from Redis (including remembered not-found)"))
+	if err != nil {
+		return err
+	}
+	misses, err := meter.Int64ObservableCounter("app.cache.misses",
+		metric.WithDescription("Cache lookups not found in Redis"))
+	if err != nil {
+		return err
+	}
+	loads, err := meter.Int64ObservableCounter("app.cache.loads",
+		metric.WithDescription("Times the cache had to load from the database"))
+	if err != nil {
+		return err
+	}
+	attrs := metric.WithAttributes(attribute.String("cache", name))
+	_, err = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+		s := stats()
+		o.ObserveInt64(hits, int64(s.Hits), attrs)
+		o.ObserveInt64(misses, int64(s.Misses), attrs)
+		o.ObserveInt64(loads, int64(s.Loads), attrs)
+		return nil
+	}, hits, misses, loads)
+	return err
 }
 
 // ToCache is for loaders passed to GetOrLoad: it turns the app's not-found
@@ -50,6 +96,10 @@ func FromCache(err error, notFoundMessage string) error {
 // malformed URL is an error: if Redis isn't reachable, that is logged to log and
 // the client is returned anyway, so the app starts and uses Postgres
 // directly until Redis comes back.
+//
+// Every Redis command becomes a span in the request's trace (so a trace shows
+// e.g. "GET student:5, 0.3ms"), and command latency and pool usage are
+// reported as metrics.
 func OpenRedis(ctx context.Context, url string, log zerolog.Logger) (*redis.Client, error) {
 	opts, err := redis.ParseURL(url)
 	if err != nil {
@@ -66,11 +116,20 @@ func OpenRedis(ctx context.Context, url string, log zerolog.Logger) (*redis.Clie
 	opts.WriteTimeout = 300 * time.Millisecond
 
 	// go-redis has its own logger, which prints with Go's standard log package
-	// and would bypass zerolog (and break JSON output). Route it through ours.
+	// and would bypass our logger (and break JSON output). Route it through ours.
 	// go-redis only offers this setting for the whole process, not per client.
 	redis.SetLogger(redisLogger{log: log})
 
 	rdb := redis.NewClient(opts)
+	// WithDBStatement(false): spans name the command (GET, SET...) but don't
+	// record its arguments. Those include the cached values, i.e. students'
+	// names and emails, which don't belong in a tracing system.
+	if err := redisotel.InstrumentTracing(rdb, redisotel.WithDBStatement(false)); err != nil {
+		return nil, fmt.Errorf("redis tracing: %w", err)
+	}
+	if err := redisotel.InstrumentMetrics(rdb); err != nil {
+		return nil, fmt.Errorf("redis metrics: %w", err)
+	}
 
 	pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -81,15 +140,15 @@ func OpenRedis(ctx context.Context, url string, log zerolog.Logger) (*redis.Clie
 	return rdb, nil
 }
 
-// redisLogger adapts zerolog to the interface go-redis logs through. Its
+// redisLogger adapts our logger to the interface go-redis logs through. Its
 // messages (e.g. "failed to dial") repeat what our own warnings already say,
 // so they're logged at debug level: visible with LOG_LEVEL=debug only.
 type redisLogger struct {
 	log zerolog.Logger
 }
 
-func (l redisLogger) Printf(_ context.Context, format string, v ...any) {
-	l.log.Debug().Str("source", "go-redis").Msgf(format, v...)
+func (l redisLogger) Printf(ctx context.Context, format string, v ...any) {
+	l.log.Debug().Ctx(ctx).Str("source", "go-redis").Msgf(format, v...)
 }
 
 // options returns the settings every cache in the app uses, plus its own key
@@ -116,6 +175,7 @@ func options(prefix string, log zerolog.Logger) []rediscache.Option {
 // until it expires.
 func WarnInvalidate(ctx context.Context, err error, what string) {
 	if err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).Str("entry", what).Msg("couldn't remove cache entry; it may be stale until it expires")
+		zerolog.Ctx(ctx).Warn().Ctx(ctx).Err(err).Str("entry", what).
+			Msg("couldn't remove cache entry; it may be stale until it expires")
 	}
 }

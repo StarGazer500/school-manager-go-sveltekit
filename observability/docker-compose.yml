@@ -1,0 +1,119 @@
+name: school-observability
+
+# The observability stack, one container per job (production-style):
+#
+#   app traces ──OTLP──▶ otel-collector ──▶ tempo       (traces)
+#   browser (Faro) ────▶   (buffering,  ──▶ loki        (logs)
+#   app log file ──────▶    retries,
+#                           sampling)
+#   prometheus ──scrapes──▶ app :9464/metrics          (metrics)
+#   grafana ◀── queries all three; dashboards and alerts from files
+#
+# Settings that differ per machine (passwords, sampling) come from .env,
+# created from .env.example on the first `make up`.
+#
+# Only what you need from the host is published, and only on 127.0.0.1:
+# Grafana, the collector's inputs, and Prometheus for exploring. Tempo and
+# Loki are reachable only inside this network.
+
+services:
+  # One-off: give the collector and Tempo (which run as user 10001) ownership
+  # of their data volumes. Uses the Prometheus image only because it has a
+  # shell; it exits once done.
+  init-permissions:
+    image: prom/prometheus:v3.16.0
+    user: "0"
+    entrypoint: ["sh", "-c", "chown -R 10001:10001 /var/lib/otelcol /var/tempo"]
+    volumes:
+      - collector-data:/var/lib/otelcol
+      - tempo-data:/var/tempo
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.165.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    restart: unless-stopped
+    depends_on:
+      init-permissions: { condition: service_completed_successfully }
+    environment:
+      TRACE_SAMPLING_PERCENT: ${TRACE_SAMPLING_PERCENT:-25}
+    ports:
+      - "127.0.0.1:4317:4317" # OTLP gRPC
+      - "127.0.0.1:4318:4318" # OTLP HTTP: the API sends traces here
+      - "127.0.0.1:8027:8027" # Faro: browser telemetry (via Vite/nginx /collect)
+    volumes:
+      - ./collector/config.yaml:/etc/otelcol/config.yaml:ro
+      - collector-data:/var/lib/otelcol # retry queue + log file offsets
+      - ../backend/logs:/var/log/school-api:ro # the API's log file
+    # memory_limiter in the config keeps the collector under 80% of this.
+    mem_limit: 512m
+
+  tempo:
+    image: grafana/tempo:3.1.1
+    command: ["-config.file=/etc/tempo.yaml"]
+    restart: unless-stopped
+    depends_on:
+      init-permissions: { condition: service_completed_successfully }
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+
+  loki:
+    image: grafana/loki:3.7.9
+    command: ["-config.file=/etc/loki.yaml"]
+    restart: unless-stopped
+    volumes:
+      - ./loki/loki.yaml:/etc/loki.yaml:ro
+      - loki-data:/loki
+
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d # how long metrics are kept
+      - --web.enable-remote-write-receiver # Tempo writes service-graph metrics here
+      - --enable-feature=exemplar-storage # keep trace IDs on latency data points
+    ports:
+      - "127.0.0.1:9090:9090" # Prometheus UI, for exploring metrics directly
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # to scrape the API running on the host
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  grafana:
+    image: grafana/grafana:13.3.0
+    restart: unless-stopped
+    depends_on: [prometheus, tempo, loki]
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      # A real login: the password comes from .env (never committed).
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in observability/.env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro # data sources, dashboard folder, alerts
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  collector-data:
+  tempo-data:
+  loki-data:
+  prometheus-data:
+  grafana-data:

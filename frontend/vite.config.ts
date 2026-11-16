@@ -7,10 +7,20 @@ export default defineConfig(({ mode }) => {
 	// Where the Go API runs. The browser calls /api/v1 on the same origin and
 	// Vite forwards it here, so there is no CORS. In production nginx does the
 	// same job (see nginx.conf). Override with API_TARGET=http://host:port.
-	const apiTarget = loadEnv(mode, '.', '').API_TARGET || 'http://localhost:8080';
-	const proxy = { '/api': apiTarget };
+	const env = loadEnv(mode, '.', '');
+	const apiTarget = env.API_TARGET || 'http://localhost:8080';
+	// Faro (browser telemetry) posts to /collect; forward it to the
+	// OpenTelemetry Collector's Faro receiver, which listens on "/".
+	const faroTarget = env.FARO_TARGET || 'http://localhost:8027';
+	const proxy = {
+		'/api': apiTarget,
+		'/collect': { target: faroTarget, rewrite: () => '/' }
+	};
 
 	return {
+		// The git commit, so browser telemetry names the version like the API
+		// does. The Makefile sets APP_VERSION; plain `npm run dev` shows "dev".
+		define: { __APP_VERSION__: JSON.stringify(env.APP_VERSION || 'dev') },
 		server: { proxy },
 		preview: { proxy },
 		plugins: [

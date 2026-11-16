@@ -26,5 +26,9 @@
 	"imports": {
 		"#lib": "./src/lib/index.js",
 		"#lib/*": "./src/lib/*"
+	},
+	"dependencies": {
+		"@grafana/faro-web-sdk": "^2.14.0",
+		"@grafana/faro-web-tracing": "^2.14.0"
 	}
 }

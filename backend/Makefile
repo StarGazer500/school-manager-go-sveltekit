@@ -3,6 +3,10 @@
 PORT         ?= 8080
 DATABASE_URL ?= postgres://school:school@localhost:5433/school?sslmode=disable
 REDIS_URL    ?= redis://localhost:6380/0
+# JSON logs also go to this file; the observability stack's collector tails
+# it and ships the lines to Loki (observability/collector/config.yaml).
+LOG_FILE     ?= logs/api.log
+METRICS_PORT ?= 9464
 BIN          := bin/api
 
 # pgrepo and rediscache live in private GitHub repos. GOPRIVATE makes Go fetch them with git
@@ -18,7 +22,8 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 run: db-up ## Start Postgres and Redis (if needed) and the API
-	PORT=$(PORT) DATABASE_URL='$(DATABASE_URL)' REDIS_URL='$(REDIS_URL)' go run ./cmd/api
+	PORT=$(PORT) DATABASE_URL='$(DATABASE_URL)' REDIS_URL='$(REDIS_URL)' \
+	LOG_FILE='$(LOG_FILE)' METRICS_PORT=$(METRICS_PORT) go run ./cmd/api
 
 build: ## Compile to bin/api
 	go build -o $(BIN) ./cmd/api
